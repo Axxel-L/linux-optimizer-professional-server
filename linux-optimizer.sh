@@ -3,7 +3,7 @@
 set -o pipefail
 
 readonly APP_NAME="AxelL - Linux Optimmisateur"
-readonly APP_VERSION="2.0.0"
+readonly APP_VERSION="2.0.1"
 readonly APP_LICENSE="MIT"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly LOG_DIR="/var/log/linux-optimizer"
@@ -144,7 +144,7 @@ run_profile() {
         error "Profil Debian introuvable dans le depot local."
         return 1
     fi
-    PROFILE_MODE="$profile" AUTO_APPLY="$auto_apply" SCRIPT_DIR="$SCRIPT_DIR" bash "$SCRIPT_DIR/scripts/debian-optimizer.sh"
+    PROFILE_MODE="$profile" AUTO_APPLY="$auto_apply" bash "$SCRIPT_DIR/scripts/debian-optimizer.sh"
 }
 
 choose_roles() {
@@ -198,7 +198,7 @@ main() {
         return 0
     fi
     if [[ "${1:-}" == "--full" ]]; then
-        run_profile full 1
+        run_profile full 1 || error "Le profil automatique a rencontre une erreur. Consultez le journal."
     else
         choose_mode
     fi

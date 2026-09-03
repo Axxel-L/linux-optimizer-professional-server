@@ -3,7 +3,7 @@
 [![Debian 13](https://img.shields.io/badge/Debian-13%20Trixie-A81D33?logo=debian&logoColor=white)](https://www.debian.org/releases/trixie/)
 [![Shell](https://img.shields.io/badge/Shell-Bash-121011?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Licence MIT](https://img.shields.io/badge/licence-MIT-2ea44f.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0.0-1677ff.svg)](linux-optimizer.sh)
+[![Version](https://img.shields.io/badge/version-2.0.1-1677ff.svg)](linux-optimizer.sh)
 
 Outil d'audit et d'optimisation prudente pour serveurs Linux professionnels. Le projet cible en priorité **Debian 13 (Trixie)** sur des machines qui hébergent Docker, sites web, applications Node.js/Python, Pterodactyl/Wings ou KeyHelp.
 
@@ -42,7 +42,7 @@ Archive du projet : [telecharger la derniere version](https://github.com/Axxel-L
 
 Le script commence par un audit puis propose deux modes :
 
-- **Optimisation complete automatique** : applique le socle et tous les reglages professionnels sans question intermediaire.
+- **Optimisation complete automatique** : met a jour Debian et son noyau, installe les outils necessaires, puis applique le socle et les reglages professionnels sans question intermediaire.
 - **Choisir les roles** : selectionne Docker, Web, Node.js/Python, Pterodactyl ou KeyHelp ; le profil combine est ensuite applique en une seule passe.
 
 Pour produire uniquement un rapport sans modification :
@@ -59,14 +59,14 @@ sudo ./linux-optimizer.sh --full
 
 ## Changements sensibles
 
-Les choix suivants demandent une confirmation explicite :
+En mode selection des roles, les choix suivants demandent une confirmation explicite :
 
 - reglages noyau via un fichier dedie dans `/etc/linux-optimizer/` ;
 - durcissement SSH dans `/etc/ssh/sshd_config.d/99-linux-optimizer.conf` ;
 - ajout de regles UFW pour SSH, HTTP et HTTPS ;
 - creation d'une swap de 1 Gio uniquement si aucune swap n'est activee.
 
-Le pare-feu existant n'est pas purge. Les ports Docker, Pterodactyl, KeyHelp, bases de donnees et services internes doivent etre valides manuellement avant exposition publique.
+En mode `--full`, les etapes sont appliquees automatiquement. Le pare-feu existant n'est pas purge et aucune regle Docker/Pterodactyl, base de donnees ou service interne n'est ouverte automatiquement.
 
 ## Sauvegardes et rollback
 
