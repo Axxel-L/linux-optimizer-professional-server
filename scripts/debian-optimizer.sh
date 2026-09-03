@@ -3,16 +3,25 @@
 set -Eeuo pipefail
 
 readonly PROFILE="${PROFILE_MODE:-base}"
+readonly AUTO="${AUTO_APPLY:-0}"
 readonly CONFIG_DIR="/etc/linux-optimizer"
 readonly SYSCTL_FILE="${CONFIG_DIR}/sysctl-${PROFILE}.conf"
 readonly LIMITS_FILE="${CONFIG_DIR}/limits.conf"
 readonly SSH_FILE="${CONFIG_DIR}/sshd.conf"
 readonly LOG_PREFIX="[${PROFILE}]"
+readonly PROFILE_START="$(date +%s)"
 
 info() { printf '\033[36m%s\033[0m %s\n' "$LOG_PREFIX" "$*"; }
 success() { printf '\033[32m%s\033[0m %s\n' "$LOG_PREFIX" "$*"; }
 warn() { printf '\033[33m%s\033[0m %s\n' "$LOG_PREFIX" "$*"; }
 error() { printf '\033[31m%s\033[0m %s\n' "$LOG_PREFIX" "$*" >&2; }
+
+stage() {
+    local current="$1" total="$2" label="$3" now elapsed
+    now=$(date +%s)
+    elapsed=$((now - PROFILE_START))
+    printf '\033[36m[%d/%d]\033[0m %-42s \033[2m(%02dm%02ds)\033[0m\n' "$current" "$total" "$label" "$((elapsed / 60))" "$((elapsed % 60))"
+}
 
 require_root() {
     [[ "$EUID" -eq 0 ]] || { error "Les profils doivent etre lances en root."; exit 1; }
@@ -21,8 +30,15 @@ require_root() {
 
 confirm() {
     local answer
+    if [[ "$AUTO" == 1 ]]; then
+        return 0
+    fi
     read -r -p "$1 [y/N] " answer
     [[ "$answer" =~ ^[yY]$ ]]
+}
+
+has_role() {
+    [[ ",$PROFILE," == *",$1,"* || "$PROFILE" == full ]]
 }
 
 backup_file() {
@@ -69,6 +85,17 @@ build_sysctl() {
         fi
         if sysctl -q net.core.default_qdisc >/dev/null 2>&1; then
             available_sysctl net.core.default_qdisc fq
+        fi
+        if has_role docker; then
+            available_sysctl fs.inotify.max_user_instances 1024
+            available_sysctl fs.inotify.max_user_watches 524288
+        fi
+        if has_role web; then
+            available_sysctl net.core.somaxconn 8192
+        fi
+        if has_role pterodactyl; then
+            available_sysctl net.ipv4.ip_forward 1
+            available_sysctl net.ipv6.conf.all.forwarding 1
         fi
     } > "$file"
 }
@@ -165,15 +192,14 @@ apply_swap() {
 }
 
 profile_description() {
-    case "$PROFILE" in
-        base) printf 'Reglages prudents et communs a un serveur Debian.' ;;
-        docker) printf 'Reglages prudents pour hote Docker et conteneurs.' ;;
-        web) printf 'Reglages prudents pour reverse proxy et services web.' ;;
-        app) printf 'Reglages prudents pour applications Node.js et Python.' ;;
-        pterodactyl) printf 'Reglages prudents pour Pterodactyl/Wings ; allocations a verifier.' ;;
-        keyhelp) printf 'Reglages prudents pour serveur gere par KeyHelp.' ;;
-    *) error "Profil inconnu : $PROFILE"; return 1 ;;
-    esac
+    if [[ "$PROFILE" == full ]]; then
+        printf 'Optimisation complete automatique pour serveur professionnel.'
+    elif [[ "$PROFILE" == base || "$PROFILE" == *,* || "$PROFILE" == docker || "$PROFILE" == web || "$PROFILE" == app || "$PROFILE" == pterodactyl || "$PROFILE" == keyhelp ]]; then
+        printf 'Optimisation combinee des roles : %s.' "$PROFILE"
+    else
+        error "Profil inconnu : $PROFILE"
+        return 1
+    fi
 }
 
 main() {
@@ -181,17 +207,26 @@ main() {
     profile_description
     info "$(profile_description)"
     printf '\n'
-    info "Apercu : sysctl, limites nofile et SSH peuvent etre proposes."
+    if [[ "$AUTO" == 1 ]]; then
+        warn "Mode automatique : les etapes du profil seront appliquees sans question intermediaire."
+    else
+        info "Apercu : sysctl, limites nofile, SSH, pare-feu et swap seront proposes."
+    fi
     show_ports
     if [[ "${1:-}" == "--audit" || "${1:-}" == "--dry-run" ]]; then
         success "Mode audit : aucune modification."
         return 0
     fi
     confirm "Appliquer le profil $PROFILE ?" || { warn "Operation annulee."; return 0; }
+    stage 1 5 "Reglages noyau et reseau"
     apply_sysctl
+    stage 2 5 "Limites de fichiers pour les services"
     apply_limits
+    stage 3 5 "Validation et durcissement SSH"
     if confirm "Appliquer le durcissement SSH ?"; then apply_ssh; fi
+    stage 4 5 "Analyse du pare-feu et des ports"
     if confirm "Analyser puis proposer les regles pare-feu ?"; then apply_firewall; fi
+    stage 5 5 "Verification de la swap"
     apply_swap
     success "Profil $PROFILE termine."
 }

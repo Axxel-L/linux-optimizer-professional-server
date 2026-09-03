@@ -134,7 +134,7 @@ animate_progress() {
 }
 
 run_profile() {
-    local profile="$1"
+    local profile="$1" auto_apply="${2:-0}"
     if [[ "$OS_ID" != debian ]]; then
         error "Cette version complete cible Debian. Systeme detecte : $OS_NAME."
         warn "Les scripts historiques des autres distributions ne sont plus executes automatiquement."
@@ -144,31 +144,42 @@ run_profile() {
         error "Profil Debian introuvable dans le depot local."
         return 1
     fi
-    PROFILE_MODE="$profile" SCRIPT_DIR="$SCRIPT_DIR" bash "$SCRIPT_DIR/scripts/debian-optimizer.sh"
+    PROFILE_MODE="$profile" AUTO_APPLY="$auto_apply" SCRIPT_DIR="$SCRIPT_DIR" bash "$SCRIPT_DIR/scripts/debian-optimizer.sh"
 }
 
-choose_profile() {
+choose_roles() {
+    local roles="base" choice
+    printf '\n%bCONFIGURATION DU SERVEUR%b\n' "$C_CYAN" "$C_RESET"
+    printf 'Repondez y/n pour chaque role detecte ou utilise sur ce serveur.\n\n'
+    read -r -p 'Docker / conteneurs [n] : ' choice
+    [[ "$choice" =~ ^[yY]$ ]] && roles+=",docker"
+    read -r -p 'Web / Nginx / Apache / PHP [n] : ' choice
+    [[ "$choice" =~ ^[yY]$ ]] && roles+=",web"
+    read -r -p 'Applications Node.js / Python [n] : ' choice
+    [[ "$choice" =~ ^[yY]$ ]] && roles+=",app"
+    read -r -p 'Pterodactyl / Wings [n] : ' choice
+    [[ "$choice" =~ ^[yY]$ ]] && roles+=",pterodactyl"
+    read -r -p 'KeyHelp [n] : ' choice
+    [[ "$choice" =~ ^[yY]$ ]] && roles+=",keyhelp"
+    printf '\n'
+    info "Roles selectionnes : $roles"
+    run_profile "$roles" 0
+}
+
+choose_mode() {
     local choice
-    printf '\n%bPROFILS PROFESSIONNELS%b\n' "$C_CYAN" "$C_RESET"
-    printf '  1  Base prudente (recommande)\n'
-    printf '  2  Hote Docker / multi-conteneurs\n'
-    printf '  3  Serveur web / reverse proxy\n'
-    printf '  4  Node.js / Python\n'
-    printf '  5  Pterodactyl / Wings\n'
-    printf '  6  KeyHelp\n'
-    printf '  a  Audit uniquement\n'
+    printf '\n%bMODE D OPTIMISATION%b\n' "$C_CYAN" "$C_RESET"
+    printf '  1  Optimisation complete automatique\n'
+    printf '  2  Choisir les roles du serveur\n'
+    printf '  3  Audit uniquement\n'
     printf '  q  Quitter\n\n'
-    read -r -p 'Votre choix [a] : ' choice
+    read -r -p 'Votre choix [3] : ' choice
     case "$choice" in
-        1) run_profile base ;;
-        2) run_profile docker ;;
-        3) run_profile web ;;
-        4) run_profile app ;;
-        5) run_profile pterodactyl ;;
-        6) run_profile keyhelp ;;
-        a|A|'') success "Audit termine. Aucune modification appliquee." ;;
+        1) run_profile full 1 ;;
+        2) choose_roles ;;
+        3|'') success "Audit termine. Aucune modification appliquee." ;;
         q|Q) exit 0 ;;
-        *) warn "Choix invalide."; choose_profile ;;
+        *) warn "Choix invalide."; choose_mode ;;
     esac
 }
 
@@ -186,7 +197,11 @@ main() {
         animate_progress "Rapport genere" 3 3
         return 0
     fi
-    choose_profile
+    if [[ "${1:-}" == "--full" ]]; then
+        run_profile full 1
+    else
+        choose_mode
+    fi
     animate_progress "Session terminee" 3 3
     info "Rapport disponible : $REPORT_FILE"
 }

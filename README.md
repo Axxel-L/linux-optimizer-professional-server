@@ -40,10 +40,21 @@ tmp=$(mktemp -d) && wget -qO "$tmp/linux-optimizer.tar.gz" "https://github.com/A
 
 Archive du projet : [telecharger la derniere version](https://github.com/Axxel-L/linux-optimizer-professional-server/archive/refs/heads/main.tar.gz)
 
-Le script commence par un audit. Il demande ensuite le profil et une confirmation avant les actions sensibles. Pour produire uniquement un rapport sans modification :
+Le script commence par un audit puis propose deux modes :
+
+- **Optimisation complete automatique** : applique le socle et tous les reglages professionnels sans question intermediaire.
+- **Choisir les roles** : selectionne Docker, Web, Node.js/Python, Pterodactyl ou KeyHelp ; le profil combine est ensuite applique en une seule passe.
+
+Pour produire uniquement un rapport sans modification :
 
 ```bash
 sudo ./linux-optimizer.sh --audit
+```
+
+Pour lancer directement l'optimisation complete automatique :
+
+```bash
+sudo ./linux-optimizer.sh --full
 ```
 
 ## Changements sensibles
