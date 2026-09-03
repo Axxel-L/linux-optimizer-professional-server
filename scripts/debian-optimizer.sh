@@ -141,9 +141,9 @@ update_system() {
 
 install_base_packages() {
     local packages=(ca-certificates curl jq htop vim-tiny unzip rsync openssh-client)
-    if has_role app; then packages+=(python3 python3-venv nodejs npm); fi
-    if has_role web; then packages+=(nginx); fi
-    if has_role docker; then packages+=(uidmap); fi
+    if [[ "$PROFILE" != full ]] && has_role app; then packages+=(python3 python3-venv nodejs npm); fi
+    if [[ "$PROFILE" != full ]] && has_role web; then packages+=(nginx); fi
+    if [[ "$PROFILE" != full ]] && has_role docker; then packages+=(uidmap); fi
     run_apt "Installation des outils serveur" -y install "${packages[@]}"
 }
 
