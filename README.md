@@ -12,7 +12,6 @@ Outil d'audit et d'optimisation prudente pour serveurs Linux professionnels. Le 
 ## Points forts
 
 - Audit initial en lecture seule avec OS, noyau, RAM, swap, BBR, services et ports en ecoute.
-- Splash de demarrage au nom de **AxelL - Linux Optimmisateur** avec licence MIT.
 - Progression coloree avec pourcentage, temps ecoule et estimation du temps restant.
 - Journal horodate et rapport final dans `/var/log/linux-optimizer/`.
 - Configurations idempotentes avec sauvegardes datees.
@@ -36,10 +35,10 @@ Outil d'audit et d'optimisation prudente pour serveurs Linux professionnels. Le 
 Sur un serveur Debian 13, executer cette commande en root ou avec un compte sudo :
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/Axxel-L/linux-optimizer-professional-server/main/linux-optimizer.sh" -o linux-optimizer.sh && chmod +x linux-optimizer.sh && sudo ./linux-optimizer.sh
+tmp=$(mktemp -d) && wget -qO "$tmp/linux-optimizer.tar.gz" "https://github.com/Axxel-L/linux-optimizer-professional-server/archive/refs/heads/main.tar.gz" && tar -xzf "$tmp/linux-optimizer.tar.gz" -C "$tmp" && cd "$tmp/linux-optimizer-professional-server-main" && chmod +x linux-optimizer.sh scripts/*.sh && sudo ./linux-optimizer.sh
 ```
 
-Lien direct : [telecharger linux-optimizer.sh](https://raw.githubusercontent.com/Axxel-L/linux-optimizer-professional-server/main/linux-optimizer.sh)
+Archive du projet : [telecharger la derniere version](https://github.com/Axxel-L/linux-optimizer-professional-server/archive/refs/heads/main.tar.gz)
 
 Le script commence par un audit. Il demande ensuite le profil et une confirmation avant les actions sensibles. Pour produire uniquement un rapport sans modification :
 
