@@ -3,12 +3,13 @@
 set -o pipefail
 
 readonly APP_NAME="AxelL - Linux Optimmisateur"
-readonly APP_VERSION="2.0.1"
+readonly APP_VERSION="2.1.0"
 readonly APP_LICENSE="MIT"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly LOG_DIR="/var/log/linux-optimizer"
 readonly REPORT_FILE="${LOG_DIR}/report-$(date +%Y%m%d-%H%M%S).txt"
 readonly IS_TTY="$( [[ -t 1 ]] && printf 'yes' || printf 'no' )"
+readonly UI_WIDTH=72
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     readonly C_RESET=$'\033[0m'
@@ -16,12 +17,14 @@ if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     readonly C_GREEN=$'\033[32m'
     readonly C_YELLOW=$'\033[33m'
     readonly C_RED=$'\033[31m'
+    readonly C_DIM=$'\033[2m'
 else
     readonly C_RESET=""
     readonly C_CYAN=""
     readonly C_GREEN=""
     readonly C_YELLOW=""
     readonly C_RED=""
+    readonly C_DIM=""
 fi
 
 mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -32,17 +35,28 @@ success() { printf '%b[ OK ]%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
 error() { printf '%b[FAIL]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
 
+ui_header() {
+    [[ "$IS_TTY" == yes ]] || return 0
+    printf '\033[2J\033[H'
+    printf '%b╭────────────────────────────────────────────────────────────────────────╮%b\n' "$C_CYAN" "$C_RESET"
+    printf '%b│%b  %b%-66s%b  %b│%b\n' "$C_CYAN" "$C_RESET" "$C_GREEN" "$APP_NAME" "$C_RESET" "$C_CYAN" "$C_RESET"
+    printf '%b│%b  Debian 13 · Professional server profile · v%-8s · MIT          %b│%b\n' "$C_CYAN" "$C_RESET" "$APP_VERSION" "$C_CYAN" "$C_RESET"
+    printf '%b╰────────────────────────────────────────────────────────────────────────╯%b\n\n' "$C_CYAN" "$C_RESET"
+}
+
+ui_step() {
+    local number="$1" total="$2" state="$3" label="$4" symbol
+    case "$state" in
+        active) symbol='>' ;;
+        done) symbol='✓' ;;
+        fail) symbol='!' ;;
+        *) symbol='·' ;;
+    esac
+    printf '  %b[%s]%b %b%02d/%02d%b  %-52s\n' "$C_CYAN" "$symbol" "$C_RESET" "$C_DIM" "$number" "$total" "$C_RESET" "$label"
+}
+
 show_splash() {
-    if [[ "$IS_TTY" == yes ]]; then
-        printf '\033[2J\033[H'
-    fi
-    printf '%b\n' "$C_CYAN"
-    printf '  +--------------------------------------------------------+\n'
-    printf '  |  %-52s  |\n' "$APP_NAME"
-    printf '  |  %-52s  |\n' "Professional server optimizer"
-    printf '  |  Version %-8s | Licence %-31s |\n' "$APP_VERSION" "$APP_LICENSE"
-    printf '  +--------------------------------------------------------+\n'
-    printf '%b\n' "$C_RESET"
+    ui_header
     warn "Aucun changement ne sera applique avant votre confirmation."
     info "Journal : $REPORT_FILE"
 }
@@ -112,7 +126,7 @@ progress() {
     filled=$((current * width / total))
     empty=$((width - filled))
     if [[ "$IS_TTY" == yes ]]; then
-        printf '\033[2K\r%b  [%s%s]%b %3d%%  %-31s  %02dm%02ds  ETA %02dm%02ds' "$C_CYAN" "$(printf '%*s' "$filled" '' | tr ' ' '=')" "$(printf '%*s' "$empty" '')" "$C_RESET" "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))" "$((eta / 60))" "$((eta % 60))"
+        printf '\033[2K\r  %b[%s%s]%b %3d%%  %-31s  %02dm%02ds  ETA %02dm%02ds' "$C_CYAN" "$(printf '%*s' "$filled" '' | tr ' ' '━')" "$(printf '%*s' "$empty" '' | tr ' ' '─')" "$C_RESET" "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))" "$((eta / 60))" "$((eta % 60))"
     else
         printf '[%3d%%] %-31s (%02dm%02ds)\n' "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))"
     fi
@@ -188,12 +202,19 @@ main() {
     load_os
     show_splash
     START_TIME=$(date +%s)
+    ui_step 1 3 active "Detection de l'environnement"
+    ui_step 2 3 pending "Audit des risques et services"
+    ui_step 3 3 pending "Session d'optimisation"
     animate_progress "Detection de l'environnement" 1 3
     detect_services
     show_audit
+    ui_step 1 3 done "Detection de l'environnement"
+    ui_step 2 3 active "Audit des risques et services"
     animate_progress "Audit et estimation des risques" 2 3
     if [[ "${1:-}" == "--audit" || "${1:-}" == "--dry-run" ]]; then
         success "Mode audit : aucune modification appliquee."
+        ui_step 2 3 done "Audit des risques et services"
+        ui_step 3 3 done "Rapport genere"
         animate_progress "Rapport genere" 3 3
         return 0
     fi

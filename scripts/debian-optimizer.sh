@@ -104,18 +104,19 @@ build_sysctl() {
 }
 
 run_apt() {
-    local label="$1" output_file pid frame=0 frames='|/-\\'
+    local label="$1" output_file pid frame=0 frames='|/-\\' tty_output=0
     shift
+    [[ -w /dev/tty ]] && tty_output=1
     output_file=$(mktemp /tmp/linux-optimizer-apt.XXXXXX)
     DEBIAN_FRONTEND=noninteractive apt-get -q "$@" >"$output_file" 2>&1 &
     pid=$!
-    if [[ -t 1 ]]; then
+    if (( tty_output == 1 )); then
         while kill -0 "$pid" 2>/dev/null; do
-            printf '\r\033[36m  %s\033[0m %s' "${frames:frame%4:1}" "$label"
+            printf '\r\033[36m  %s\033[0m %s' "${frames:frame%4:1}" "$label" > /dev/tty
             sleep 0.15
             ((frame += 1))
         done
-        printf '\r\033[2K'
+        printf '\r\033[2K' > /dev/tty
     else
         printf '[....] %s\n' "$label"
     fi
@@ -251,7 +252,6 @@ profile_description() {
 
 main() {
     require_root
-    profile_description
     info "$(profile_description)"
     printf '\n'
     if [[ "$AUTO" == 1 ]]; then

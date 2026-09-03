@@ -3,7 +3,7 @@
 [![Debian 13](https://img.shields.io/badge/Debian-13%20Trixie-A81D33?logo=debian&logoColor=white)](https://www.debian.org/releases/trixie/)
 [![Shell](https://img.shields.io/badge/Shell-Bash-121011?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Licence MIT](https://img.shields.io/badge/licence-MIT-2ea44f.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0.1-1677ff.svg)](linux-optimizer.sh)
+[![Version](https://img.shields.io/badge/version-2.1.0-1677ff.svg)](linux-optimizer.sh)
 
 Outil d'audit et d'optimisation prudente pour serveurs Linux professionnels. Le projet cible en priorité **Debian 13 (Trixie)** sur des machines qui hébergent Docker, sites web, applications Node.js/Python, Pterodactyl/Wings ou KeyHelp.
 
