@@ -1,44 +1,95 @@
 #!/usr/bin/env bash
-
+# =============================================================================
+# AxelL - Linux Optimmisateur - moteur du profil Debian 13
+# -----------------------------------------------------------------------------
+# Ce fichier contient TOUTE la logique d'optimisation du profil Debian :
+# paquets, sysctl, limites, SSH, pare-feu, swap et DNS Cloudflare.
+#
+# Deux modes d'utilisation :
+#
+#   1. Source (normal)  : charge par linux-optimizer.sh, qui fournit l'interface
+#      (info/success/warn/error/note/confirm) puis execute les etapes definies
+#      dans STEP_FUNCS / STEP_LABELS. Ce moteur est re-source par le lanceur
+#      apres le choix du profil (variables PROFILE_MODE / AUTO_APPLY).
+#
+#   2. Executable seul (debug) : lance le profil ${PROFILE_MODE:-base} avec une
+#      sortie texte simple et aucune dependance. Exemple :
+#        sudo PROFILE_MODE=web AUTO_APPLY=1 ./scripts/debian-optimizer.sh
+#
+# Valeurs de retour des etapes (convention partagee avec le lanceur) :
+#   0  = etape terminee avec succes
+#   1  = erreur (le lanceur interrompt le profil)
+#   2  = etape ignoree / declinee (pas une erreur)
+#
+# Fichiers geres :
+#   /etc/linux-optimizer/sysctl-<profil>.conf   reglages noyau
+#   /etc/linux-optimizer/limits.conf            limites nofile
+#   /etc/linux-optimizer/sshd.conf              durcissement SSH
+#   /etc/systemd/resolved.conf.d/99-linux-optimizer-dns.conf (systemd-resolved)
+#   /etc/netplan/99-linux-optimizer-dns.yaml    (netplan)
+#   /etc/resolvconf/resolv.conf.d/head          (openresolv)
+#   /etc/resolv.conf                            (mode statique)
+#
+# Toute modification est precedee d'une sauvegarde datee (.bak) sur place.
+# =============================================================================
 set -Eeuo pipefail
 
-readonly PROFILE="${PROFILE_MODE:-base}"
-readonly AUTO="${AUTO_APPLY:-0}"
-readonly CONFIG_DIR="/etc/linux-optimizer"
-readonly SYSCTL_FILE="${CONFIG_DIR}/sysctl-${PROFILE}.conf"
-readonly LIMITS_FILE="${CONFIG_DIR}/limits.conf"
-readonly SSH_FILE="${CONFIG_DIR}/sshd.conf"
-readonly LOG_PREFIX="[${PROFILE}]"
-readonly PROFILE_START="$(date +%s)"
+# --- Primitives de sortie : le lanceur fournit des versions adaptees a son
+# interface graphique quand ce fichier est source. En execution directe, on
+# retombe sur une sortie texte simple.
+if ! declare -F info >/dev/null 2>&1; then
+    info()    { printf '[INFO] %s\n' "$*"; }
+    success() { printf '[ OK ] %s\n' "$*"; }
+    warn()    { printf '[WARN] %s\n' "$*"; }
+    error()   { printf '[FAIL] %s\n' "$*" >&2; }
+    note()    { printf '[....] %s\n' "$*"; }
+fi
 
-info() { printf '\033[36m%s\033[0m %s\n' "$LOG_PREFIX" "$*"; }
-success() { printf '\033[32m%s\033[0m %s\n' "$LOG_PREFIX" "$*"; }
-warn() { printf '\033[33m%s\033[0m %s\n' "$LOG_PREFIX" "$*"; }
-error() { printf '\033[31m%s\033[0m %s\n' "$LOG_PREFIX" "$*" >&2; }
+if ! declare -F confirm >/dev/null 2>&1; then
+    # confirm "message" [force] : reponse y/N. force=1 pose la question meme en
+    # mode automatique (AUTO_APPLY=1), pour les changements sensibles (DNS).
+    confirm() {
+        local msg="${1:-Confirmer ?}" force="${2:-0}" answer
+        if [[ "${AUTO:-0}" == 1 && "$force" != 1 ]]; then
+            return 0
+        fi
+        printf '%s [y/N] ' "$msg"
+        read -r answer || true
+        [[ "$answer" =~ ^[yY]$ ]]
+    }
+fi
 
-stage() {
-    local current="$1" total="$2" label="$3" now elapsed width filled empty
-    now=$(date +%s)
-    elapsed=$((now - PROFILE_START))
-    width=24
-    filled=$((current * width / total))
-    empty=$((width - filled))
-    printf '\033[36m[%d/%d]\033[0m [%s%s] %3d%%  %-38s \033[2m(%02dm%02ds)\033[0m\n' "$current" "$total" "$(printf '%*s' "$filled" '' | tr ' ' '=')" "$(printf '%*s' "$empty" '')" "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))"
-}
+# --- Profil courant (relu a chaque source par le lanceur) --------------------
+PROFILE="${PROFILE_MODE:-base}"
+AUTO="${AUTO_APPLY:-0}"
+CONFIG_DIR="/etc/linux-optimizer"
+SYSCTL_FILE="${CONFIG_DIR}/sysctl-${PROFILE}.conf"
+LIMITS_FILE="${CONFIG_DIR}/limits.conf"
+SSH_FILE="${CONFIG_DIR}/sshd.conf"
 
-require_root() {
-    [[ "$EUID" -eq 0 ]] || { error "Les profils doivent etre lances en root."; exit 1; }
-    [[ "${ID:-debian}" == debian ]] || { error "Ce profil est reserve a Debian."; exit 1; }
-}
+# --- Etapes du profil (ordre d'execution) -------------------------------------
+STEP_LABELS=(
+    "Mise a jour du systeme et du noyau"
+    "Installation des outils du profil"
+    "Reglages noyau et reseau"
+    "Limites de fichiers pour les services"
+    "Validation et durcissement SSH"
+    "Pare-feu et ports"
+    "Verification de la swap"
+    "DNS Cloudflare (1.1.1.1)"
+)
+STEP_FUNCS=(
+    update_system
+    install_base_packages
+    apply_sysctl
+    apply_limits
+    apply_ssh
+    apply_firewall
+    apply_swap
+    apply_dns
+)
 
-confirm() {
-    local answer
-    if [[ "$AUTO" == 1 ]]; then
-        return 0
-    fi
-    read -r -p "$1 [y/N] " answer
-    [[ "$answer" =~ ^[yY]$ ]]
-}
+# --- Helpers ------------------------------------------------------------------
 
 has_role() {
     [[ ",$PROFILE," == *",$1,"* || "$PROFILE" == full ]]
@@ -64,70 +115,22 @@ available_sysctl() {
     sysctl -q "$key" >/dev/null 2>&1 && printf '%s = %s\n' "$key" "$value"
 }
 
-build_sysctl() {
-    local file="$SYSCTL_FILE" file_max
-    file_max=$(cat /proc/sys/fs/file-max 2>/dev/null || printf '1048576')
-    {
-        printf '# Generated by AxelL Linux Optimmisateur for profile %s\n' "$PROFILE"
-        printf 'fs.file-max = %s\n' "$file_max"
-        available_sysctl net.core.somaxconn 4096
-        available_sysctl net.core.netdev_max_backlog 4096
-        available_sysctl net.ipv4.tcp_syncookies 1
-        available_sysctl net.ipv4.tcp_slow_start_after_idle 1
-        available_sysctl net.ipv4.tcp_keepalive_time 600
-        available_sysctl net.ipv4.tcp_keepalive_intvl 60
-        available_sysctl net.ipv4.tcp_keepalive_probes 5
-        available_sysctl net.ipv4.conf.default.rp_filter 2
-        available_sysctl net.ipv4.conf.all.rp_filter 2
-        available_sysctl vm.swappiness 10
-        available_sysctl vm.vfs_cache_pressure 100
-        if sysctl -n net.ipv4.tcp_allowed_congestion_control 2>/dev/null | tr ' ' '\n' | grep -qx bbr; then
-            available_sysctl net.ipv4.tcp_congestion_control bbr
-        else
-            warn "BBR indisponible : conservation de l'algorithme TCP actuel."
-        fi
-        if sysctl -q net.core.default_qdisc >/dev/null 2>&1; then
-            available_sysctl net.core.default_qdisc fq
-        fi
-        if has_role docker; then
-            available_sysctl fs.inotify.max_user_instances 1024
-            available_sysctl fs.inotify.max_user_watches 524288
-        fi
-        if has_role web; then
-            available_sysctl net.core.somaxconn 8192
-        fi
-        if has_role pterodactyl; then
-            available_sysctl net.ipv4.ip_forward 1
-            available_sysctl net.ipv6.conf.all.forwarding 1
-        fi
-    } > "$file"
-}
+# --- Systeme : APT -----------------------------------------------------------
 
 run_apt() {
-    local label="$1" output_file pid frame=0 frames='|/-\\' tty_output=0
+    local label="$1" output_file
     shift
-    [[ -w /dev/tty ]] && tty_output=1
+    info "Lancement : $label"
     output_file=$(mktemp /tmp/linux-optimizer-apt.XXXXXX)
-    DEBIAN_FRONTEND=noninteractive apt-get -q "$@" >"$output_file" 2>&1 &
-    pid=$!
-    if (( tty_output == 1 )); then
-        while kill -0 "$pid" 2>/dev/null; do
-            printf '\r\033[36m  %s\033[0m %s' "${frames:frame%4:1}" "$label" > /dev/tty
-            sleep 0.15
-            ((frame += 1))
-        done
-        printf '\r\033[2K' > /dev/tty
-    else
-        printf '[....] %s\n' "$label"
-    fi
-    if ! wait "$pid"; then
-        cat "$output_file" >&2
+    if DEBIAN_FRONTEND=noninteractive apt-get -q "$@" >"$output_file" 2>&1; then
         rm -f "$output_file"
-        error "Echec de l'etape APT : $label"
-        return 1
+        success "$label termine."
+        return 0
     fi
+    cat "$output_file" >&2
     rm -f "$output_file"
-    success "$label termine."
+    error "Echec de l'etape APT : $label"
+    return 1
 }
 
 update_system() {
@@ -148,6 +151,68 @@ install_base_packages() {
     run_apt "Installation des outils serveur" -y install "${packages[@]}"
 }
 
+# --- Noyau et reseau ----------------------------------------------------------
+
+build_sysctl() {
+    local file="$SYSCTL_FILE" file_max port_range
+    file_max=$(cat /proc/sys/fs/file-max 2>/dev/null || printf '1048576')
+    port_range=$(sysctl -n net.ipv4.ip_local_port_range 2>/dev/null || true)
+    {
+        printf '# Generated by AxelL Linux Optimmisateur - profile %s\n' "$PROFILE"
+        printf '# File: %s - restore: sysctl --load on the dated .bak\n' "$SYSCTL_FILE"
+        printf 'fs.file-max = %s\n' "$file_max"
+
+        # Filet de base
+        available_sysctl net.core.somaxconn 4096
+        available_sysctl net.core.netdev_max_backlog 4096
+        available_sysctl net.ipv4.tcp_syncookies 1
+        available_sysctl net.ipv4.tcp_slow_start_after_idle 1
+        available_sysctl net.ipv4.tcp_keepalive_time 600
+        available_sysctl net.ipv4.tcp_keepalive_intvl 60
+        available_sysctl net.ipv4.tcp_keepalive_probes 5
+        available_sysctl net.ipv4.conf.default.rp_filter 2
+        available_sysctl net.ipv4.conf.all.rp_filter 2
+        available_sysctl vm.swappiness 10
+        available_sysctl vm.vfs_cache_pressure 100
+
+        # Connexions TCP plus soutenues (valeurs prudentes, exposees par le noyau)
+        available_sysctl net.ipv4.tcp_max_syn_backlog 8192
+        available_sysctl net.ipv4.tcp_fin_timeout 30
+        available_sysctl net.ipv4.tcp_tw_reuse 1
+        available_sysctl net.ipv4.tcp_mtu_probing 1
+        available_sysctl net.ipv4.tcp_rmem "4096 87380 4194304"
+        available_sysctl net.ipv4.tcp_wmem "4096 16384 4194304"
+        if [[ "$port_range" == "32768 60999" ]]; then
+            available_sysctl net.ipv4.ip_local_port_range "1024 65535"
+        else
+            printf '# net.ipv4.ip_local_port_range deja personnalise (%s) : conserve\n' "$port_range"
+        fi
+
+        # BBR + fq uniquement si le noyau les expose
+        if sysctl -n net.ipv4.tcp_allowed_congestion_control 2>/dev/null | tr ' ' '\n' | grep -qx bbr; then
+            available_sysctl net.ipv4.tcp_congestion_control bbr
+        else
+            warn "BBR indisponible : conservation de l'algorithme TCP actuel."
+        fi
+        if sysctl -q net.core.default_qdisc >/dev/null 2>&1; then
+            available_sysctl net.core.default_qdisc fq
+        fi
+
+        # Roles
+        if has_role docker; then
+            available_sysctl fs.inotify.max_user_instances 1024
+            available_sysctl fs.inotify.max_user_watches 524288
+        fi
+        if has_role web; then
+            available_sysctl net.core.somaxconn 8192
+        fi
+        if has_role pterodactyl; then
+            available_sysctl net.ipv4.ip_forward 1
+            available_sysctl net.ipv6.conf.all.forwarding 1
+        fi
+    } > "$file"
+}
+
 apply_sysctl() {
     info "Preparation des reglages noyau adaptes au profil."
     mkdir -p "$CONFIG_DIR"
@@ -163,16 +228,29 @@ apply_sysctl() {
     success "Reglages noyau appliques dans $SYSCTL_FILE."
 }
 
+# --- Limites ------------------------------------------------------------------
+
 apply_limits() {
     local nofile
-    nofile=$(( $(ulimit -n 2>/dev/null || printf '1024') < 65536 ? 65536 : $(ulimit -n 2>/dev/null || printf '1024') ))
+    nofile=$(ulimit -n 2>/dev/null || printf '1024')
+    if (( nofile < 65536 )); then nofile=65536; fi
     write_config "$LIMITS_FILE" "# Limits managed by AxelL Linux Optimmisateur\n* soft nofile $nofile\n* hard nofile $nofile"
     success "Limite nofile configuree a $nofile, sans modifier /etc/profile."
 }
 
+# --- SSH ----------------------------------------------------------------------
+
 apply_ssh() {
-    local sshd_bin="$(command -v sshd || true)"
-    [[ -n "$sshd_bin" ]] || { warn "sshd absent : configuration SSH ignoree."; return 0; }
+    local sshd_bin
+    sshd_bin="$(command -v sshd || true)"
+    if [[ -z "$sshd_bin" ]]; then
+        warn "sshd absent : configuration SSH ignoree."
+        return 2
+    fi
+    if ! confirm "Appliquer le durcissement SSH ?" 0; then
+        warn "Durcissement SSH decline."
+        return 2
+    fi
     write_config "$SSH_FILE" $'# Managed by AxelL Linux Optimmisateur\nUseDNS no\nTCPKeepAlive yes\nClientAliveInterval 300\nClientAliveCountMax 2\nAllowTcpForwarding no\nGatewayPorts no\nPermitTunnel no\nX11Forwarding no'
     mkdir -p /etc/ssh/sshd_config.d
     backup_file /etc/ssh/sshd_config.d/99-linux-optimizer.conf
@@ -182,20 +260,28 @@ apply_ssh() {
         error "Configuration SSH invalide : aucun redemarrage effectue."
         return 1
     fi
-    if confirm "Redemarrer SSH pour appliquer le durcissement maintenant ?"; then
+    if confirm "Redemarrer SSH pour appliquer le durcissement maintenant ?" 0; then
         systemctl reload ssh 2>/dev/null || systemctl reload sshd
         success "SSH valide et recharge."
     else
         warn "Configuration SSH installee mais non rechargee."
     fi
+    return 0
 }
 
+# --- Pare-feu -----------------------------------------------------------------
+
 show_ports() {
-    info "Ports actuellement en ecoute :"
-    ss -H -lntu 2>/dev/null | awk '{print "  " $1 " " $5}' | sort -u || true
+    local line
+    note "Ports actuellement en ecoute :"
+    while read -r line; do
+        [[ -n "$line" ]] && note "  $line"
+    done < <(ss -H -lntu 2>/dev/null | awk '{print $1 " " $5}' | sort -u || true)
     if command -v docker >/dev/null 2>&1; then
-        info "Ports Docker publies :"
-        docker ps --format '  {{.Names}}: {{.Ports}}' 2>/dev/null || true
+        note "Ports Docker publies :"
+        while read -r line; do
+            [[ -n "$line" ]] && note "  $line"
+        done < <(docker ps --format '  {{.Names}}: {{.Ports}}' 2>/dev/null || true)
     fi
 }
 
@@ -203,25 +289,26 @@ apply_firewall() {
     show_ports
     if systemctl is-active --quiet firewalld 2>/dev/null; then
         warn "firewalld est actif : aucune installation ou purge de pare-feu ne sera effectuee."
-        return 0
+        return 2
     fi
     if ! command -v ufw >/dev/null 2>&1; then
-        warn "UFW absent. Installez-le et definissez vos regles metier avant de revenir ici."
-        return 0
+        warn "UFW absent : le pare-feu n'est pas modifie (installez UFW et definissez vos regles metier)."
+        return 2
     fi
-    warn "Le script ne peut pas deduire quels ports applicatifs doivent etre publics."
-    if confirm "Ajouter uniquement le port SSH detecte et 80/443 a UFW ?"; then
-        local ssh_port
-        ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}' || printf '22')
-        ufw allow "${ssh_port}/tcp"
-        ufw allow 80/tcp
-        ufw allow 443/tcp
-        ufw reload
-        success "Regles minimales ajoutees ; les ports Docker/Pterodactyl restent a definir explicitement."
-    else
+    if ! confirm "Ajouter uniquement le port SSH detecte et 80/443 a UFW ?" 0; then
         warn "Pare-feu laisse inchange."
+        return 2
     fi
+    local ssh_port
+    ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}' || printf '22')
+    ufw allow "${ssh_port}/tcp"
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw reload
+    success "Regles minimales ajoutees ; les ports Docker/Pterodactyl restent a definir explicitement."
 }
+
+# --- Swap ---------------------------------------------------------------------
 
 apply_swap() {
     if swapon --show --noheadings 2>/dev/null | grep -q .; then
@@ -229,20 +316,196 @@ apply_swap() {
         return 0
     fi
     warn "Aucune swap active detectee. Sa taille depend du workload et ne sera pas imposee automatiquement."
-    if confirm "Creer une swap de 1 Gio a /swapfile ?"; then
-        fallocate -l 1G /swapfile
-        chmod 600 /swapfile
-        mkswap /swapfile >/dev/null
-        swapon /swapfile
-        grep -qF '/swapfile none swap sw 0 0' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
-        success "Swap de 1 Gio activee."
+    if ! confirm "Creer une swap de 1 Gio a /swapfile ?" 0; then
+        warn "Swap non creee."
+        return 2
+    fi
+    fallocate -l 1G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null
+    swapon /swapfile
+    grep -qF '/swapfile none swap sw 0 0' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
+    success "Swap de 1 Gio activee."
+}
+
+# --- DNS Cloudflare -----------------------------------------------------------
+
+ipv6_enabled() {
+    [[ -d /proc/sys/net/ipv6 ]] || return 1
+    [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || printf '0')" != 1 ]] || return 1
+    ip -6 addr show scope global 2>/dev/null | grep -q .
+}
+
+dns_server_list() {
+    local servers="1.1.1.1 1.0.0.1"
+    if ipv6_enabled; then
+        printf '%s 2606:4700:4700::1111 2606:4700:4700::1001\n' "$servers"
+    else
+        printf '%s\n' "$servers"
+    fi
+}
+
+dns_resolv_nameservers() {
+    # glibc ne lit que les 3 premieres entrees de resolv.conf
+    if ipv6_enabled; then
+        printf 'nameserver 1.1.1.1\nnameserver 1.0.0.1\nnameserver 2606:4700:4700::1111\n'
+    else
+        printf 'nameserver 1.1.1.1\nnameserver 1.0.0.1\n'
+    fi
+}
+
+dns_manager() {
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        printf 'systemd-resolved'
+    elif command -v netplan >/dev/null 2>&1 && compgen -G '/etc/netplan/*.yaml' >/dev/null 2>&1; then
+        printf 'netplan'
+    elif command -v resolvconf >/dev/null 2>&1 && [[ -d /etc/resolvconf/resolv.conf.d ]]; then
+        printf 'openresolv'
+    else
+        printf 'resolv.conf statique'
+    fi
+}
+
+dns_configure_resolved() {
+    local dir="/etc/systemd/resolved.conf.d" dropin="$dir/99-linux-optimizer-dns.conf"
+    mkdir -p "$dir"
+    backup_file "$dropin"
+    cat > "$dropin" <<EOF
+# Managed by AxelL Linux Optimmisateur - Cloudflare DNS
+# Restauration : supprimer ce fichier puis systemctl restart systemd-resolved
+[Resolve]
+DNS=$(dns_server_list)
+FallbackDNS=1.1.1.1 1.0.0.1
+EOF
+    chmod 0644 "$dropin"
+    if ! systemctl restart systemd-resolved; then
+        rm -f "$dropin"
+        error "systemd-resolved n'a pas accepte la configuration DNS."
+        return 1
+    fi
+    success "systemd-resolved configure ($dropin)."
+}
+
+dns_configure_netplan() {
+    local iface name dropin="/etc/netplan/99-linux-optimizer-dns.yaml" found=0
+    for iface in /sys/class/net/*; do
+        name=$(basename "$iface")
+        case "$name" in
+            lo|veth*|docker*|br-*|virbr*|tun*|tap*|vnet*|vmbr*|vlan*|bond*) continue ;;
+        esac
+        if grep -rqs "^[[:space:]]*${name}:" /etc/netplan/; then
+            found=1
+        fi
+    done
+    if (( found == 0 )); then
+        warn "Aucune interface netplan connue : DNS Cloudflare non applique au niveau netplan."
+        return 2
+    fi
+    backup_file "$dropin"
+    {
+        printf '# Managed by AxelL Linux Optimmisateur - Cloudflare DNS\n'
+        printf 'network:\n  version: 2\n  ethernets:\n'
+        for iface in /sys/class/net/*; do
+            name=$(basename "$iface")
+            case "$name" in
+                lo|veth*|docker*|br-*|virbr*|tun*|tap*|vnet*|vmbr*|vlan*|bond*) continue ;;
+            esac
+            grep -rqs "^[[:space:]]*${name}:" /etc/netplan/ || continue
+            printf '    %s:\n      nameservers:\n        addresses:\n          - 1.1.1.1\n          - 1.0.0.1\n' "$name"
+        done
+    } > "$dropin"
+    chmod 0600 "$dropin"
+    if ! netplan apply; then
+        rm -f "$dropin"
+        error "netplan n'a pas accepte la configuration DNS."
+        return 1
+    fi
+    success "netplan configure ($dropin)."
+}
+
+dns_configure_resolvconf() {
+    local head="/etc/resolvconf/resolv.conf.d/head" old=""
+    if [[ -f "$head" ]]; then
+        old=$(grep -vE '^[[:space:]]*nameserver[[:space:]]' "$head" || true)
+    fi
+    backup_file "$head"
+    {
+        printf '%s\n' "$old"
+        dns_resolv_nameservers
+    } > "$head"
+    chmod 0644 "$head"
+    if ! resolvconf -u; then
+        error "openresolv n'a pas regenere la configuration DNS."
+        return 1
+    fi
+    success "openresolv configure ($head)."
+}
+
+dns_configure_static() {
+    local target="/etc/resolv.conf" real="" old=""
+    if [[ -L "$target" ]]; then
+        real=$(readlink "$target")
+        backup_file "$real"
+        if [[ -f "$real" ]]; then
+            old=$(grep -E '^(search|domain|options)[[:space:]]' "$real" || true)
+        fi
+        rm -f "$target"
+    else
+        backup_file "$target"
+        if [[ -f "$target" ]]; then
+            old=$(grep -E '^(search|domain|options)[[:space:]]' "$target" || true)
+        fi
+    fi
+    {
+        printf '%s\n' "$old"
+        dns_resolv_nameservers
+    } > "$target"
+    chmod 0644 "$target"
+    success "resolv.conf reecrit (domaines de recherche preserves)."
+}
+
+dns_verify() {
+    if getent ahosts one.one.one.one >/dev/null 2>&1; then
+        success "Resolution DNS fonctionnelle : one.one.one.one joignable."
+    else
+        warn "Impossible de verifier la resolution DNS (one.one.one.one). Les sauvegardes .bak permettent une restauration immediate."
+    fi
+}
+
+apply_dns() {
+    local manager
+    manager=$(dns_manager)
+    note "Gestionnaire DNS detecte : $manager."
+    note "Serveurs cibles : $(dns_server_list)."
+    if ! confirm "Basculer la resolution DNS sur Cloudflare ($(dns_server_list)) ?" 1; then
+        warn "DNS laisse inchange (Cloudflare non applique)."
+        return 2
+    fi
+    case "$manager" in
+        systemd-resolved) dns_configure_resolved ;;
+        netplan)          dns_configure_netplan ;;
+        openresolv)       dns_configure_resolvconf ;;
+        *)                dns_configure_static ;;
+    esac
+    dns_verify
+    return 0
+}
+
+# --- Divers -------------------------------------------------------------------
+
+kernel_reboot_notice() {
+    local running newest
+    running=$(uname -r 2>/dev/null || true)
+    newest=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#.*/vmlinuz-##' | sort -V 2>/dev/null | tail -n1 || true)
+    if [[ -n "$running" && -n "$newest" && "$newest" != "$running" ]]; then
+        warn "Noyau ${newest} installe, ${running} en cours : un redemarrage est recommande pour l'appliquer."
     fi
 }
 
 profile_description() {
     if [[ "$PROFILE" == full ]]; then
         printf 'Optimisation complete automatique pour serveur professionnel.'
-    elif [[ "$PROFILE" == base || "$PROFILE" == *,* || "$PROFILE" == docker || "$PROFILE" == web || "$PROFILE" == app || "$PROFILE" == pterodactyl || "$PROFILE" == keyhelp ]]; then
+    elif [[ "$PROFILE" == base || "$PROFILE" == *,* ]]; then
         printf 'Optimisation combinee des roles : %s.' "$PROFILE"
     else
         error "Profil inconnu : $PROFILE"
@@ -250,36 +513,43 @@ profile_description() {
     fi
 }
 
+# --- Mode executable seul (debug) ---------------------------------------------
+
 main() {
-    require_root
-    info "$(profile_description)"
+    if [[ "$EUID" -ne 0 ]]; then
+        error "Lancez ce script avec sudo ou depuis une session root."
+        exit 1
+    fi
+    if [[ ! -r /etc/os-release ]]; then
+        error "/etc/os-release est introuvable."
+        exit 1
+    fi
+    . /etc/os-release
+    if [[ "${ID:-}" != debian ]]; then
+        error "Ce profil est reserve a Debian (systeme detecte : ${PRETTY_NAME:-$ID})."
+        exit 1
+    fi
+    printf '\n%s\n' "$(profile_description)"
+    printf 'Mode automatique : %s\n' "$([ "$AUTO" == 1 ] && printf 'oui' || printf 'non')"
+    local i rc total=${#STEP_FUNCS[@]}
+    for (( i = 0; i < total; i++ )); do
+        printf '\n[%d/%d] %s ...\n' "$((i + 1))" "$total" "${STEP_LABELS[$i]}"
+        ( "${STEP_FUNCS[$i]}" )
+        rc=$?
+        case "$rc" in
+            0) success "${STEP_LABELS[$i]} : termine." ;;
+            2) warn "${STEP_LABELS[$i]} : ignore." ;;
+            *)
+                error "${STEP_LABELS[$i]} : echec. Profil interrompu."
+                exit 1
+                ;;
+        esac
+    done
     printf '\n'
-    if [[ "$AUTO" == 1 ]]; then
-        warn "Mode automatique : les etapes du profil seront appliquees sans question intermediaire."
-    else
-            info "Apercu : systeme, noyau, paquets, sysctl, limites nofile, SSH, pare-feu et swap seront traites."
-    fi
-    show_ports
-    if [[ "${1:-}" == "--audit" || "${1:-}" == "--dry-run" ]]; then
-        success "Mode audit : aucune modification."
-        return 0
-    fi
-    confirm "Appliquer le profil $PROFILE ?" || { warn "Operation annulee."; return 0; }
-    stage 1 7 "Mise a jour du systeme et du noyau"
-    update_system
-    stage 2 7 "Installation des outils du profil"
-    install_base_packages
-    stage 3 7 "Reglages noyau et reseau"
-    apply_sysctl
-    stage 4 7 "Limites de fichiers pour les services"
-    apply_limits
-    stage 5 7 "Validation et durcissement SSH"
-    if confirm "Appliquer le durcissement SSH ?"; then apply_ssh; fi
-    stage 6 7 "Analyse du pare-feu et des ports"
-    if confirm "Analyser puis proposer les regles pare-feu ?"; then apply_firewall; fi
-    stage 7 7 "Verification de la swap"
-    apply_swap
+    kernel_reboot_notice
     success "Profil $PROFILE termine."
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

@@ -1,17 +1,53 @@
 #!/usr/bin/env bash
-
-set -o pipefail
+# =============================================================================
+# AxelL - Linux Optimmisateur - lanceur Debian 13
+# -----------------------------------------------------------------------------
+# Audit en lecture seule puis application d'un profil d'optimisation, avec un
+# tableau de bord terminal mis a jour en direct (etapes, pourcentage, chrono).
+#
+# Usage :
+#   sudo ./linux-optimizer.sh                 mode interactif (menu)
+#   sudo ./linux-optimizer.sh --full          optimisation complete automatique
+#   sudo ./linux-optimizer.sh --audit         rapport seul, aucune modification
+#   sudo ./linux-optimizer.sh --help
+#
+# Interface :
+#   - Le terminal est efface au lancement, puis chaque transition d'etape
+#     redessine l'ecran : liste des etapes avec etat en direct
+#     (en attente / en cours / fait / ignore / echec), pourcentage global,
+#     barre de progression et temps ecoule. Ni spinner ni estimation.
+#   - Sortie non-TTY (journal, pipe, CI) : lignes de texte simples, sans
+#     aucun code d'echappement.
+#
+# Journalisation :
+#   Chaque evenement est ecrit, horodate et sans ANSI, dans :
+#     /var/log/linux-optimizer/report-<date>.txt
+#
+# Rendu du profil :
+#   Le moteur (scripts/debian-optimizer.sh) est source apres le choix du
+#   profil (variables PROFILE_MODE / AUTO_APPLY), puis ses etapes STEP_FUNCS
+#   sont executees une par une. Convention des codes de retour :
+#     0 = succes   1 = erreur (abandon)   2 = etape ignoree/declinee.
+#
+# Variables d'environnement :
+#   NO_COLOR=1  desactive les couleurs.
+# =============================================================================
+set -Eeuo pipefail
 
 readonly APP_NAME="AxelL - Linux Optimmisateur"
-readonly APP_VERSION="2.1.0"
+readonly APP_VERSION="2.2.0"
 readonly APP_LICENSE="MIT"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly ENGINE="${SCRIPT_DIR}/scripts/debian-optimizer.sh"
 readonly LOG_DIR="/var/log/linux-optimizer"
 readonly REPORT_FILE="${LOG_DIR}/report-$(date +%Y%m%d-%H%M%S).txt"
-readonly IS_TTY="$( [[ -t 1 ]] && printf 'yes' || printf 'no' )"
-readonly UI_WIDTH=72
+# Attention : pas de substitution de commande ici, le stdout y est un pipe et
+# -t 1 serait toujours faux.
+if [[ -t 1 ]]; then readonly IS_TTY=1; else readonly IS_TTY=0; fi
+readonly IS_UTF8=$([[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *[Uu][Tt][Ff]-8* ]] && printf 1 || printf 0)
 
-if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+# --- Couleurs (terminal uniquement, NO_COLOR respecte) -----------------------
+if [[ "$IS_TTY" == 1 && -z "${NO_COLOR:-}" ]]; then
     readonly C_RESET=$'\033[0m'
     readonly C_CYAN=$'\033[36m'
     readonly C_GREEN=$'\033[32m'
@@ -27,66 +63,173 @@ else
     readonly C_DIM=""
 fi
 
+# --- Jeu de caracteres (fallback ASCII hors locale UTF-8) ---------------------
+if [[ "$IS_UTF8" == 1 ]]; then
+    readonly S_DONE='✓'; readonly S_RUN='▶'; readonly S_FAIL='✗'
+    readonly S_SKIP='–'; readonly S_WAIT='·'
+    readonly S_FILL='█'; readonly S_EMPTY='░'; readonly S_RULE='━'
+else
+    readonly S_DONE='v'; readonly S_RUN='>'; readonly S_FAIL='x'
+    readonly S_SKIP='-'; readonly S_WAIT='.'
+    readonly S_FILL='#'; readonly S_EMPTY='.'; readonly S_RULE='='
+fi
+
+char_rule() {
+    local n="$1" ch="$2" out=""
+    while (( n-- > 0 )); do out+="$ch"; done
+    printf '%s' "$out"
+}
+readonly UI_RULE="$(char_rule 70 "$S_RULE")"
+readonly UI_RULE_SMALL="$(char_rule 34 "$S_RULE")"
+
+# --- Etat global de l'interface -------------------------------------------------
+DASH=0            # 1 = tableau de bord plein ecran (profil en cours sur TTY)
+AUTO=0            # 1 = mode automatique (confirmations sautees, sauf force)
+PROFILE=""        # profil actif (fixe par le moteur au moment du source)
+START_TIME=0
+readonly NOTES_FILE="$(mktemp /tmp/linux-optimizer-notes.XXXXXX 2>/dev/null || mktemp)"
+readonly WARN_FILE="$(mktemp /tmp/linux-optimizer-warn.XXXXXX 2>/dev/null || mktemp)"
+trap 'rm -f "$NOTES_FILE" "$WARN_FILE"' EXIT
+declare -a STEP_STATES=()
+
+# --- Sortie console / journal ---------------------------------------------------
 mkdir -p "$LOG_DIR" 2>/dev/null || true
-exec > >(tee -a "$REPORT_FILE") 2>&1
 
-info() { printf '%b[INFO]%b %s\n' "$C_CYAN" "$C_RESET" "$*"; }
-success() { printf '%b[ OK ]%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
-warn() { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
-error() { printf '%b[FAIL]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
-
-ui_header() {
-    [[ "$IS_TTY" == yes ]] || return 0
-    printf '\033[2J\033[H'
-    printf '%b╭────────────────────────────────────────────────────────────────────────╮%b\n' "$C_CYAN" "$C_RESET"
-    printf '%b│%b  %b%-66s%b  %b│%b\n' "$C_CYAN" "$C_RESET" "$C_GREEN" "$APP_NAME" "$C_RESET" "$C_CYAN" "$C_RESET"
-    printf '%b│%b  Debian 13 · Professional server profile · v%-8s · MIT          %b│%b\n' "$C_CYAN" "$C_RESET" "$APP_VERSION" "$C_CYAN" "$C_RESET"
-    printf '%b╰────────────────────────────────────────────────────────────────────────╯%b\n\n' "$C_CYAN" "$C_RESET"
+report_open() {
+    [[ -e "$REPORT_FILE" ]] && return 0
+    mkdir -p "$LOG_DIR" 2>/dev/null || return 1
+    : > "$REPORT_FILE" 2>/dev/null
 }
 
-ui_step() {
-    local number="$1" total="$2" state="$3" label="$4" symbol
-    case "$state" in
-        active) symbol='>' ;;
-        done) symbol='✓' ;;
-        fail) symbol='!' ;;
-        *) symbol='·' ;;
-    esac
-    printf '  %b[%s]%b %b%02d/%02d%b  %-52s\n' "$C_CYAN" "$symbol" "$C_RESET" "$C_DIM" "$number" "$total" "$C_RESET" "$label"
+report_line() {
+    report_open || return 0
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$REPORT_FILE" 2>/dev/null || true
 }
 
-show_splash() {
-    :
+out() { printf '%b\n' "$*"; }
+
+info() {
+    report_line "[INFO] $*"
+    (( DASH )) || out "${C_CYAN}[INFO]${C_RESET} $*"
 }
 
-ui_boot_dashboard() {
-    local current="$1" label="$2" now elapsed eta width filled empty
-    now=$(date +%s)
-    elapsed=$((now - START_TIME))
-    eta=$((elapsed * 3 / current - elapsed))
-    (( eta < 0 )) && eta=0
-    width=24
-    filled=$((current * width / 3))
-    empty=$((width - filled))
-    ui_header
-    printf '%b  INITIALISATION DU SERVEUR%b\n\n' "$C_GREEN" "$C_RESET"
-    if (( current == 1 )); then
-        ui_step 1 3 active "Detection de l'environnement"
-        ui_step 2 3 pending "Audit des risques et services"
-        ui_step 3 3 pending "Preparation de la session"
-    elif (( current == 2 )); then
-        ui_step 1 3 done "Detection de l'environnement"
-        ui_step 2 3 active "Audit des risques et services"
-        ui_step 3 3 pending "Preparation de la session"
+note() {
+    report_line "[INFO] $*"
+    if (( DASH )); then
+        printf '%s\n' "$*" >> "$NOTES_FILE"
     else
-        ui_step 1 3 done "Detection de l'environnement"
-        ui_step 2 3 done "Audit des risques et services"
-        ui_step 3 3 active "Preparation de la session"
+        out "${C_DIM}[....]${C_RESET} $*"
     fi
-    printf '\n  %b[%s%s]%b %3d%%  %-30s  %02dm%02ds  ETA %02dm%02ds\n' "$C_CYAN" "$(printf '%*s' "$filled" '' | tr ' ' '━')" "$(printf '%*s' "$empty" '' | tr ' ' '─')" "$C_RESET" "$((current * 100 / 3))" "$label" "$((elapsed / 60))" "$((elapsed % 60))" "$((eta / 60))" "$((eta % 60))"
-    printf '\n  %bAucun changement avant la validation du mode choisi.%b\n' "$C_YELLOW" "$C_RESET"
 }
 
+success() {
+    report_line "[ OK ] $*"
+    (( DASH )) || out "${C_GREEN}[ OK ]${C_RESET} $*"
+}
+
+warn() {
+    report_line "[WARN] $*"
+    printf '%s\n' "$*" >> "$WARN_FILE"
+    (( DASH )) || out "${C_YELLOW}[WARN]${C_RESET} $*"
+}
+
+error() {
+    report_line "[FAIL] $*"
+    if (( DASH )); then
+        printf '%s\n' "$*" >> "$NOTES_FILE"
+    else
+        out "${C_RED}[FAIL]${C_RESET} $*" >&2
+    fi
+}
+
+_prompt() {
+    if [[ -w /dev/tty ]]; then
+        printf '%s' "$1" > /dev/tty
+    else
+        printf '%s' "$1"
+    fi
+}
+
+# --- Questions ---------------------------------------------------------------
+# ask "message" : reponse y/N (defaut N), retour 0 si oui.
+ask() {
+    local msg="$1" answer=""
+    if (( DASH )); then ui_render; fi
+    _prompt "$(printf '\n%b%s [y/N]%b ' "$C_YELLOW" "$msg" "$C_RESET")"
+    read -r answer || answer=""
+    [[ "$answer" =~ ^[yY]$ ]]
+}
+
+# confirm "message" [force] : en mode AUTO, seule une confirmation forcee
+# (changements sensibles comme le DNS) est conservee.
+confirm() {
+    local msg="${1:-Confirmer ?}" force="${2:-0}"
+    if [[ "$AUTO" == 1 && "$force" != 1 ]]; then
+        return 0
+    fi
+    ask "$msg"
+}
+
+# prompt_read "texte" : imprime un texte puis lit une ligne (menus).
+prompt_read() {
+    local text="$1" answer=""
+    _prompt "$text"
+    read -r answer || answer=""
+    printf '%s\n' "$answer"
+}
+
+# --- Rendu du tableau de bord ------------------------------------------------
+elapsed_text() {
+    local s=$(( $(date +%s) - START_TIME ))
+    printf '%02dm%02ds' $(( s / 60 )) $(( s % 60 ))
+}
+
+status_span() {
+    local state="$1"
+    case "$state" in
+        done)    printf '%b[%s]%b' "$C_GREEN" "$S_DONE" "$C_RESET" ;;
+        running) printf '%b[%s]%b' "$C_CYAN" "$S_RUN" "$C_RESET" ;;
+        fail)    printf '%b[%s]%b' "$C_RED" "$S_FAIL" "$C_RESET" ;;
+        skip)    printf '%b[%s]%b' "$C_YELLOW" "$S_SKIP" "$C_RESET" ;;
+        *)       printf '%b[%s]%b' "$C_DIM" "$S_WAIT" "$C_RESET" ;;
+    esac
+}
+
+ui_render() {
+    [[ "$IS_TTY" == 1 ]] || return 0
+    local i total="${#STEP_FUNCS[@]}" done_count=0 bar filled empty pct
+    local note_line
+    printf '\033[2J\033[H'
+    out "${C_CYAN}${UI_RULE}${C_RESET}"
+    out "  ${C_GREEN}${APP_NAME}${C_RESET}   ${C_DIM}Debian 13 | v${APP_VERSION} | ${APP_LICENSE}${C_RESET}"
+    if [[ -n "${PROFILE:-}" ]]; then
+        out "  ${C_DIM}Profil : ${PROFILE}${C_RESET}"
+    fi
+    out "${C_CYAN}${UI_RULE}${C_RESET}"
+    out ""
+    for (( i = 0; i < total; i++ )); do
+        case "${STEP_STATES[$i]}" in
+            done|skip|fail) done_count=$((done_count + 1)) ;;
+        esac
+        printf '  %s  %02d/%02d  %s\n' "$(status_span "${STEP_STATES[$i]}")" \
+            "$(( i + 1 ))" "$total" "${STEP_LABELS[$i]}"
+    done
+    pct=$(( done_count * 100 / total ))
+    filled=$(( pct * 34 / 100 ))
+    empty=$(( 34 - filled ))
+    bar="$(char_rule "$filled" "$S_FILL")$(char_rule "$empty" "$S_EMPTY")"
+    out ""
+    out "  ${C_CYAN}${bar}${C_RESET}  ${C_GREEN}${pct}%${C_RESET}   ${C_DIM}$(elapsed_text)${C_RESET}"
+    if [[ -s "$NOTES_FILE" ]]; then
+        out ""
+        out "  ${C_DIM}${UI_RULE_SMALL} details ${UI_RULE_SMALL}${C_RESET}"
+        while IFS= read -r note_line || [[ -n "$note_line" ]]; do
+            out "  ${C_DIM}${note_line}${C_RESET}"
+        done < "$NOTES_FILE"
+    fi
+}
+
+# --- Audit et detection ----------------------------------------------------------
 require_root() {
     if [[ "$EUID" -ne 0 ]]; then
         error "Lancez ce script avec sudo ou depuis une session root."
@@ -99,6 +242,7 @@ load_os() {
         error "/etc/os-release est introuvable."
         exit 1
     fi
+    # shellcheck disable=SC1091
     . /etc/os-release
     OS_ID="${ID:-unknown}"
     OS_VERSION="${VERSION_ID:-unknown}"
@@ -116,20 +260,31 @@ detect_services() {
     done
 }
 
+audit_section() {
+    out ""
+    out "${C_CYAN}$1${C_RESET}"
+    report_line "$1"
+}
+
+audit_item() {
+    printf '  %-15s: %s\n' "$1" "$2"
+    report_line "  $1: $2"
+}
+
 show_audit() {
     local memory swap kernel ports
     memory=$(awk '/MemTotal:/ {printf "%.1f GiB", $2 / 1024 / 1024}' /proc/meminfo)
     swap=$(awk '/SwapTotal:/ {printf "%.1f GiB", $2 / 1024 / 1024}' /proc/meminfo)
     kernel=$(uname -r)
     ports=$(ss -H -lntu 2>/dev/null | awk '{print $5}' | sed 's/.*://' | sort -n -u | paste -sd, -)
-    printf '\n%bAUDIT PREALABLE%b\n' "$C_CYAN" "$C_RESET"
-    printf '  OS             : %s (%s)\n' "$OS_NAME" "$OS_VERSION"
-    printf '  Architecture   : %s\n' "$(uname -m)"
-    printf '  Noyau          : %s\n' "$kernel"
-    printf '  Memoire / swap : %s / %s\n' "$memory" "$swap"
-    printf '  BBR            : %s\n' "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf 'indisponible')"
-    printf '  Ports en ecoute: %s\n' "${ports:-aucun detecte}"
-    printf '  Services       : %s\n' "${DETECTED_SERVICES[*]:-aucun detecte}"
+    audit_section "AUDIT PREALABLE (lecture seule)"
+    audit_item "OS" "$OS_NAME ($OS_VERSION)"
+    audit_item "Architecture" "$(uname -m)"
+    audit_item "Noyau" "$kernel"
+    audit_item "Memoire / swap" "$memory / $swap"
+    audit_item "BBR" "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf 'indisponible')"
+    audit_item "Ports en ecoute" "${ports:-aucun detecte}"
+    audit_item "Services" "${DETECTED_SERVICES[*]:-aucun detecte}"
     if printf '%s\n' "${DETECTED_SERVICES[@]}" | grep -qx docker; then
         info "Docker detecte : les ports publies seront preserves dans le profil Docker."
     fi
@@ -143,111 +298,177 @@ show_audit() {
     fi
 }
 
-progress() {
-    local current="$1" total="$2" label="$3" now elapsed eta width filled empty
-    now=$(date +%s)
-    elapsed=$((now - START_TIME))
-    if (( current > 0 )); then eta=$((elapsed * total / current - elapsed)); else eta=0; fi
-    width=28
-    filled=$((current * width / total))
-    empty=$((width - filled))
-    if [[ "$IS_TTY" == yes ]]; then
-        if (( total == 3 )); then
-            ui_boot_dashboard "$current" "$label"
-        else
-            printf '\033[2K\r  %b[%s%s]%b %3d%%  %-31s  %02dm%02ds  ETA %02dm%02ds' "$C_CYAN" "$(printf '%*s' "$filled" '' | tr ' ' '━')" "$(printf '%*s' "$empty" '' | tr ' ' '─')" "$C_RESET" "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))" "$((eta / 60))" "$((eta % 60))"
-        fi
-    else
-        printf '[%3d%%] %-31s (%02dm%02ds)\n' "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))"
-    fi
-    if (( current == total || IS_TTY != yes )); then printf '\n'; fi
-}
-
-animate_progress() {
-    local label="$1" current="$2" total="$3" frame=0 frames='|/-\\'
-    if [[ "$IS_TTY" != yes ]]; then
-        progress "$current" "$total" "$label"
-        return
-    fi
-    while (( frame < 8 )); do
-        progress "$current" "$total" "$label ${frames:frame%4:1}"
-        sleep 0.08
-        ((frame += 1))
-    done
-    progress "$current" "$total" "$label"
-}
-
-run_profile() {
-    local profile="$1" auto_apply="${2:-0}"
-    if [[ "$OS_ID" != debian ]]; then
-        error "Cette version complete cible Debian. Systeme detecte : $OS_NAME."
-        warn "Les scripts historiques des autres distributions ne sont plus executes automatiquement."
-        return 1
-    fi
-    if [[ ! -f "$SCRIPT_DIR/scripts/debian-optimizer.sh" ]]; then
-        error "Profil Debian introuvable dans le depot local."
-        return 1
-    fi
-    PROFILE_MODE="$profile" AUTO_APPLY="$auto_apply" bash "$SCRIPT_DIR/scripts/debian-optimizer.sh"
-}
-
+# --- Menus -------------------------------------------------------------------
 choose_roles() {
-    local roles="base" choice
-    printf '\n%bCONFIGURATION DU SERVEUR%b\n' "$C_CYAN" "$C_RESET"
-    printf 'Repondez y/n pour chaque role detecte ou utilise sur ce serveur.\n\n'
-    read -r -p 'Docker / conteneurs [n] : ' choice
-    [[ "$choice" =~ ^[yY]$ ]] && roles+=",docker"
-    read -r -p 'Web / Nginx / Apache / PHP [n] : ' choice
-    [[ "$choice" =~ ^[yY]$ ]] && roles+=",web"
-    read -r -p 'Applications Node.js / Python [n] : ' choice
-    [[ "$choice" =~ ^[yY]$ ]] && roles+=",app"
-    read -r -p 'Pterodactyl / Wings [n] : ' choice
-    [[ "$choice" =~ ^[yY]$ ]] && roles+=",pterodactyl"
-    read -r -p 'KeyHelp [n] : ' choice
-    [[ "$choice" =~ ^[yY]$ ]] && roles+=",keyhelp"
-    printf '\n'
-    info "Roles selectionnes : $roles"
-    run_profile "$roles" 0
+    local roles="base" answer
+    out ""
+    out "${C_CYAN}CONFIGURATION DU SERVEUR${C_RESET}"
+    out "Repondez y/n pour chaque role detecte ou utilise sur ce serveur."
+    answer=$(prompt_read "Docker / conteneurs [n] : ")
+    [[ "$answer" =~ ^[yY]$ ]] && roles+=",docker"
+    answer=$(prompt_read "Web / Nginx / Apache / PHP [n] : ")
+    [[ "$answer" =~ ^[yY]$ ]] && roles+=",web"
+    answer=$(prompt_read "Applications Node.js / Python [n] : ")
+    [[ "$answer" =~ ^[yY]$ ]] && roles+=",app"
+    answer=$(prompt_read "Pterodactyl / Wings [n] : ")
+    [[ "$answer" =~ ^[yY]$ ]] && roles+=",pterodactyl"
+    answer=$(prompt_read "KeyHelp [n] : ")
+    [[ "$answer" =~ ^[yY]$ ]] && roles+=",keyhelp"
+    start_profile "$roles" 0
 }
 
 choose_mode() {
     local choice
-    printf '\n%bMODE D OPTIMISATION%b\n' "$C_CYAN" "$C_RESET"
-    printf '  1  Optimisation complete automatique\n'
-    printf '  2  Choisir les roles du serveur\n'
-    printf '  3  Audit uniquement\n'
-    printf '  q  Quitter\n\n'
-    read -r -p 'Votre choix [3] : ' choice
+    out ""
+    out "${C_CYAN}MODE D OPTIMISATION${C_RESET}"
+    out "  1  Optimisation complete automatique"
+    out "  2  Choisir les roles du serveur"
+    out "  3  Audit uniquement"
+    out "  q  Quitter"
+    choice=$(prompt_read "Votre choix [3] : ")
     case "$choice" in
-        1) run_profile full 1 ;;
+        1) start_profile full 1 ;;
         2) choose_roles ;;
-        3|'') success "Audit termine. Aucune modification appliquee." ;;
+        3|'') finish_audit ;;
         q|Q) exit 0 ;;
         *) warn "Choix invalide."; choose_mode ;;
     esac
 }
 
-main() {
-    require_root
-    load_os
-    show_splash
-    START_TIME=$(date +%s)
-    animate_progress "Detection de l'environnement" 1 3
-    detect_services
-    show_audit
-    animate_progress "Audit et estimation des risques" 2 3
-    if [[ "${1:-}" == "--audit" || "${1:-}" == "--dry-run" ]]; then
-        success "Mode audit : aucune modification appliquee."
-        animate_progress "Rapport genere" 3 3
-        return 0
-    fi
-    if [[ "${1:-}" == "--full" ]]; then
-        run_profile full 1 || error "Le profil automatique a rencontre une erreur. Consultez le journal."
-    else
-        choose_mode
-    fi
-    animate_progress "Session terminee" 3 3
+# --- Execution du profil -------------------------------------------------------
+finish_audit() {
+    success "Audit termine. Aucune modification appliquee."
     info "Rapport disponible : $REPORT_FILE"
 }
 
-main "$@"
+start_profile() {
+    local profile="$1" auto="$2" profile_text
+    if [[ "$OS_ID" != debian ]]; then
+        error "Cette version complete cible Debian. Systeme detecte : $OS_NAME."
+        exit 1
+    fi
+    if [[ ! -f "$ENGINE" ]]; then
+        error "Moteur Debian introuvable dans le depot local ($ENGINE)."
+        exit 1
+    fi
+    PROFILE_MODE="$profile"
+    AUTO_APPLY="$auto"
+    # shellcheck source=scripts/debian-optimizer.sh
+    source "$ENGINE"
+    AUTO="$AUTO_APPLY"
+    PROFILE="$PROFILE_MODE"
+    report_line "== Profil : $PROFILE (mode automatique: $([ "$AUTO" == 1 ] && printf 'oui' || printf 'non'))"
+    if [[ "$AUTO" != 1 ]]; then
+        profile_text="$(profile_description 2>/dev/null || printf '%s' "$PROFILE")"
+        if ! ask "Appliquer le profil ${PROFILE} ? (${profile_text})"; then
+            warn "Operation annulee."
+            info "Rapport disponible : $REPORT_FILE"
+            exit 0
+        fi
+    fi
+    DASH="$IS_TTY"
+    run_profile_steps
+    DASH=0
+}
+
+run_profile_steps() {
+    local i rc ok=0 skipped=0 total="${#STEP_FUNCS[@]}" wl
+    START_TIME=$(date +%s)
+    : > "$NOTES_FILE"
+    : > "$WARN_FILE"
+    for (( i = 0; i < total; i++ )); do
+        STEP_STATES[$i]="pending"
+    done
+    report_line "== Debut du profil (${total} etapes)"
+    (( DASH )) && ui_render
+    for (( i = 0; i < total; i++ )); do
+        STEP_STATES[$i]="running"
+        report_line "== Etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}"
+        if (( DASH )); then
+            ui_render
+        else
+            info "Etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}"
+        fi
+        : > "$NOTES_FILE"
+        # Sous-shell : isole l'etape. set -e reste actif : toute commande en
+        # echec interne termine l'etape et remonte son code au lanceur.
+        ( "${STEP_FUNCS[$i]}" )
+        rc=$?
+        case "$rc" in
+            0)
+                STEP_STATES[$i]="done"
+                ok=$((ok + 1))
+                report_line "== OK : ${STEP_LABELS[$i]}"
+                (( DASH )) || success "${STEP_LABELS[$i]} : termine."
+                ;;
+            2)
+                STEP_STATES[$i]="skip"
+                skipped=$((skipped + 1))
+                report_line "== IGNORE : ${STEP_LABELS[$i]}"
+                (( DASH )) || warn "${STEP_LABELS[$i]} : ignore."
+                ;;
+            *)
+                STEP_STATES[$i]="fail"
+                (( DASH )) && ui_render
+                out ""
+                out "${C_RED}Echec de l'etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}.${C_RESET}"
+                out "${C_RED}Profil interrompu. Journal : $REPORT_FILE${C_RESET}"
+                exit 1
+                ;;
+        esac
+        (( DASH )) && ui_render
+    done
+    kernel_reboot_notice
+    (( DASH )) && ui_render
+    out ""
+    out "${C_GREEN}Profil ${PROFILE} termine : ${ok}/${total} etapes reussies, ${skipped} ignoree(s).${C_RESET}"
+    report_line "== Profil termine : ${ok}/${total} ok, ${skipped} ignoree(s)"
+    if (( DASH )) && [[ -s "$WARN_FILE" ]]; then
+        out ""
+        out "${C_YELLOW}Avertissements :${C_RESET}"
+        while IFS= read -r wl || [[ -n "$wl" ]]; do
+            out "  ${C_YELLOW}-${C_RESET} ${wl}"
+        done < "$WARN_FILE"
+    fi
+    out ""
+    info "Rapport disponible : $REPORT_FILE"
+    return 0
+}
+
+# --- Point d'entree -------------------------------------------------------------
+usage() {
+    cat <<EOF
+${APP_NAME} v${APP_VERSION} - audit et optimisation prudente d'un serveur Debian 13.
+
+Usage :
+  sudo $0                mode interactif (menu)
+  sudo $0 --full         optimisation complete automatique
+  sudo $0 --audit        audit seul (aucune modification)
+  sudo $0 --help         cette aide
+
+Variables : NO_COLOR=1 desactive les couleurs.
+Journal    : ${LOG_DIR}/report-*.txt
+EOF
+}
+
+main() {
+    [[ "$IS_TTY" == 1 ]] && printf '\033[2J\033[H'
+    case "${1:-}" in
+        -h|--help) usage; exit 0 ;;
+    esac
+    require_root
+    load_os
+    report_line "== ${APP_NAME} v${APP_VERSION} (${APP_LICENSE})"
+    report_line "== OS : ${OS_NAME} ${OS_VERSION} - noyau $(uname -r) - demarrage $(date '+%Y-%m-%d %H:%M:%S')"
+    detect_services
+    show_audit
+    case "${1:-}" in
+        --audit|--dry-run) finish_audit ;;
+        --full) start_profile full 1 ;;
+        *) choose_mode ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
