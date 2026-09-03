@@ -56,9 +56,35 @@ ui_step() {
 }
 
 show_splash() {
+    :
+}
+
+ui_boot_dashboard() {
+    local current="$1" label="$2" now elapsed eta width filled empty
+    now=$(date +%s)
+    elapsed=$((now - START_TIME))
+    eta=$((elapsed * 3 / current - elapsed))
+    (( eta < 0 )) && eta=0
+    width=24
+    filled=$((current * width / 3))
+    empty=$((width - filled))
     ui_header
-    warn "Aucun changement ne sera applique avant votre confirmation."
-    info "Journal : $REPORT_FILE"
+    printf '%b  INITIALISATION DU SERVEUR%b\n\n' "$C_GREEN" "$C_RESET"
+    if (( current == 1 )); then
+        ui_step 1 3 active "Detection de l'environnement"
+        ui_step 2 3 pending "Audit des risques et services"
+        ui_step 3 3 pending "Preparation de la session"
+    elif (( current == 2 )); then
+        ui_step 1 3 done "Detection de l'environnement"
+        ui_step 2 3 active "Audit des risques et services"
+        ui_step 3 3 pending "Preparation de la session"
+    else
+        ui_step 1 3 done "Detection de l'environnement"
+        ui_step 2 3 done "Audit des risques et services"
+        ui_step 3 3 active "Preparation de la session"
+    fi
+    printf '\n  %b[%s%s]%b %3d%%  %-30s  %02dm%02ds  ETA %02dm%02ds\n' "$C_CYAN" "$(printf '%*s' "$filled" '' | tr ' ' '━')" "$(printf '%*s' "$empty" '' | tr ' ' '─')" "$C_RESET" "$((current * 100 / 3))" "$label" "$((elapsed / 60))" "$((elapsed % 60))" "$((eta / 60))" "$((eta % 60))"
+    printf '\n  %bAucun changement avant la validation du mode choisi.%b\n' "$C_YELLOW" "$C_RESET"
 }
 
 require_root() {
@@ -126,7 +152,11 @@ progress() {
     filled=$((current * width / total))
     empty=$((width - filled))
     if [[ "$IS_TTY" == yes ]]; then
-        printf '\033[2K\r  %b[%s%s]%b %3d%%  %-31s  %02dm%02ds  ETA %02dm%02ds' "$C_CYAN" "$(printf '%*s' "$filled" '' | tr ' ' '━')" "$(printf '%*s' "$empty" '' | tr ' ' '─')" "$C_RESET" "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))" "$((eta / 60))" "$((eta % 60))"
+        if (( total == 3 )); then
+            ui_boot_dashboard "$current" "$label"
+        else
+            printf '\033[2K\r  %b[%s%s]%b %3d%%  %-31s  %02dm%02ds  ETA %02dm%02ds' "$C_CYAN" "$(printf '%*s' "$filled" '' | tr ' ' '━')" "$(printf '%*s' "$empty" '' | tr ' ' '─')" "$C_RESET" "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))" "$((eta / 60))" "$((eta % 60))"
+        fi
     else
         printf '[%3d%%] %-31s (%02dm%02ds)\n' "$((current * 100 / total))" "$label" "$((elapsed / 60))" "$((elapsed % 60))"
     fi
@@ -202,19 +232,12 @@ main() {
     load_os
     show_splash
     START_TIME=$(date +%s)
-    ui_step 1 3 active "Detection de l'environnement"
-    ui_step 2 3 pending "Audit des risques et services"
-    ui_step 3 3 pending "Session d'optimisation"
     animate_progress "Detection de l'environnement" 1 3
     detect_services
     show_audit
-    ui_step 1 3 done "Detection de l'environnement"
-    ui_step 2 3 active "Audit des risques et services"
     animate_progress "Audit et estimation des risques" 2 3
     if [[ "${1:-}" == "--audit" || "${1:-}" == "--dry-run" ]]; then
         success "Mode audit : aucune modification appliquee."
-        ui_step 2 3 done "Audit des risques et services"
-        ui_step 3 3 done "Rapport genere"
         animate_progress "Rapport genere" 3 3
         return 0
     fi
