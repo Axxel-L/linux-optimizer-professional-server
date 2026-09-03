@@ -12,10 +12,12 @@
 #   sudo ./linux-optimizer.sh --help
 #
 # Interface :
-#   - Le terminal est efface au lancement, puis chaque transition d'etape
-#     redessine l'ecran : liste des etapes avec etat en direct
-#     (en attente / en cours / fait / ignore / echec), pourcentage global,
-#     barre de progression et temps ecoule. Ni spinner ni estimation.
+#   - Ecran d'accueil (splash) avec logo, nom et version apres le nettoyage
+#     du terminal.
+#   - Chaque transition d'etape redessine l'ecran : liste des etapes avec
+#     etat en direct (en attente / en cours / fait / ignore / echec),
+#     pourcentage global, barre de progression et temps ecoule.
+#     Ni spinner ni estimation.
 #   - Sortie non-TTY (journal, pipe, CI) : lignes de texte simples, sans
 #     aucun code d'echappement.
 #
@@ -68,10 +70,14 @@ if [[ "$IS_UTF8" == 1 ]]; then
     readonly S_DONE='✓'; readonly S_RUN='▶'; readonly S_FAIL='✗'
     readonly S_SKIP='–'; readonly S_WAIT='·'
     readonly S_FILL='█'; readonly S_EMPTY='░'; readonly S_RULE='━'
+    readonly S_TL='┌'; readonly S_TR='┐'; readonly S_BL='└'; readonly S_BR='┘'
+    readonly S_VL='│'
 else
     readonly S_DONE='v'; readonly S_RUN='>'; readonly S_FAIL='x'
     readonly S_SKIP='-'; readonly S_WAIT='.'
     readonly S_FILL='#'; readonly S_EMPTY='.'; readonly S_RULE='='
+    readonly S_TL='+'; readonly S_TR='+'; readonly S_BL='+'; readonly S_BR='+'
+    readonly S_VL='|'
 fi
 
 char_rule() {
@@ -227,6 +233,44 @@ ui_render() {
             out "  ${C_DIM}${note_line}${C_RESET}"
         done < "$NOTES_FILE"
     fi
+}
+
+# --- Splash d'accueil -------------------------------------------------------
+readonly SPLASH_W=60
+
+splash_row() {
+    # ligne centree dans le cadre : texte brut + code couleur eventuel
+    local text="$1" color="${2:-}" len pad_l pad_r
+    len=$(printf '%s' "$text" | wc -m | tr -d ' ')
+    pad_l=$(( (SPLASH_W - len) / 2 ))
+    pad_r=$(( SPLASH_W - len - pad_l ))
+    printf '%b%s%b%s%b%s%b%s%b%s%b\n' \
+        "$C_CYAN" "$S_VL" "$C_RESET" "$(char_rule "$pad_l" ' ')" \
+        "$color" "$text" "$C_RESET" "$(char_rule "$pad_r" ' ')" \
+        "$C_CYAN" "$S_VL" "$C_RESET"
+}
+
+show_splash() {
+    [[ "$IS_TTY" == 1 ]] || return 0
+    # Lettres remplacees par le bloc du jeu de caracteres courant (█ ou #).
+    local -a a=( ' @@ ' '@  @' '@@@@' '@  @' '@  @' )
+    local -a x=( '@  @' ' @ @' '  @ ' ' @ @' '@  @' )
+    local -a e=( '@@@@' '@   ' '@@@ ' '@   ' '@@@@' )
+    local -a l=( '@   ' '@   ' '@   ' '@   ' '@@@@' )
+    local i row
+    out "${C_CYAN}${S_TL}$(char_rule "$SPLASH_W" "$S_RULE")${S_TR}${C_RESET}"
+    splash_row ""
+    for (( i = 0; i < 5; i++ )); do
+        row="${a[$i]}  ${x[$i]}  ${e[$i]}  ${l[$i]}"
+        splash_row "${row//@/$S_FILL}" "$C_GREEN"
+    done
+    splash_row ""
+    splash_row "$APP_NAME" "$C_GREEN"
+    splash_row "Audit et optimisation prudente d'un serveur Debian 13" "$C_DIM"
+    splash_row "v$APP_VERSION | $APP_LICENSE" "$C_CYAN"
+    splash_row ""
+    out "${C_CYAN}${S_BL}$(char_rule "$SPLASH_W" "$S_RULE")${S_BR}${C_RESET}"
+    out ""
 }
 
 # --- Audit et detection ----------------------------------------------------------
@@ -460,6 +504,7 @@ main() {
     load_os
     report_line "== ${APP_NAME} v${APP_VERSION} (${APP_LICENSE})"
     report_line "== OS : ${OS_NAME} ${OS_VERSION} - noyau $(uname -r) - demarrage $(date '+%Y-%m-%d %H:%M:%S')"
+    show_splash
     detect_services
     show_audit
     case "${1:-}" in
