@@ -29,9 +29,8 @@
 
 Ce dépôt est un **fork de [Linux-Optimizer](https://github.com/hawshemi/Linux-Optimizer)** (Hawshemi, 2023, licence MIT — voir [LICENSE](LICENSE)).
 
-- Les scripts historiques multi-distributions (`ubuntu-`, `fedora-`, `centos-optimizer.sh`) sont **conservés tels quels** et crédités au projet d'origine ;
-- la version active (v2.2+) est une **réécriture complète orientée serveurs professionnels** : elle cible Debian 13, remplace l'ancienne sortie texte par un tableau de bord live et un journal sans ANSI, ajoute un profil « full » automatique, des profils métier combinables et une gestion DNS Cloudflare prudente ;
-- le code historique n'est **plus exécuté par le lanceur** : les autres distributions restent disponibles comme scripts hérités, non maintenus ici.
+- l'historique multi-distributions (Ubuntu, Fedora, CentOS) a été **retiré** pour ne garder qu'une ligne de code maintenue et testée — **Debian** ;
+- la version active (v2.2+) est une **réécriture complète orientée serveurs professionnels** : elle cible Debian 13, remplace l'ancienne sortie texte par un tableau de bord live et un journal sans ANSI, ajoute un profil « full » automatique, des profils métier combinables et une gestion DNS Cloudflare prudente.
 
 ---
 
@@ -252,10 +251,7 @@ sudo ufw status verbose
 .
 ├── linux-optimizer.sh              # Lanceur : audit, menus, tableau de bord, journal
 ├── scripts/
-│   ├── debian-optimizer.sh         # Moteur du profil Debian (8 étapes) — sourçable & exécutable
-│   ├── ubuntu-optimizer.sh         # Historique (fork Linux-Optimizer) — non exécuté
-│   ├── fedora-optimizer.sh         # Historique (fork Linux-Optimizer) — non exécuté
-│   └── centos-optimizer.sh         # Historique (fork Linux-Optimizer) — non exécuté
+│   └── debian-optimizer.sh         # Moteur du profil Debian (8 étapes) — sourçable & exécutable
 ├── files/                          # Échantillons documentaires (sysctl, sshd_config, profile)
 ├── .github/ISSUE_TEMPLATE/         # Modèles de signalement
 └── LICENSE                         # MIT (copyright upstream 2023 Hawshemi)
@@ -273,7 +269,7 @@ sudo PROFILE_MODE=web AUTO_APPLY=1 ./scripts/debian-optimizer.sh
 
 ## ✅ Prérequis
 
-- **Debian 13** recommandé (les autres distributions restent des scripts historiques, non exécutés par le lanceur) ;
+- **Debian 13** — unique distribution supportée par le lanceur ;
 - accès **root** ou `sudo` ;
 - `bash`, `systemctl`, `ss`, `sysctl`, `awk` ;
 - une **console ou session SSH de secours** pour les changements réseau/SSH ;
@@ -322,7 +318,7 @@ Issues et pull requests bienvenues — merci de passer `bash -n` et de tester su
 
 ## 🙏 Crédits
 
-Ce projet est un **fork de [Linux-Optimizer](https://github.com/hawshemi/Linux-Optimizer)** par **Hawshemi** (MIT, 2023). Les scripts multi-distributions conservés sont issus de ce travail.
+Ce projet est un **fork de [Linux-Optimizer](https://github.com/hawshemi/Linux-Optimizer)** par **Hawshemi** (MIT, 2023), dont s'inspirent l'architecture et certains réglages. Le projet se concentre désormais **exclusivement sur Debian 13**.
 
 ## 📄 Licence
 
