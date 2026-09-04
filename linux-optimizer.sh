@@ -394,6 +394,7 @@ detect_next_debian_release() {
         return 1
     fi
     target_version=$(awk -F': ' '$1 == "Version" {print $2; exit}' "$release_file")
+    target_version="${target_version%%.*}"
     target_codename=$(awk -F': ' '$1 == "Codename" {print $2; exit}' "$release_file")
     rm -f "$release_file"
     current_version="${OS_VERSION%%.*}"

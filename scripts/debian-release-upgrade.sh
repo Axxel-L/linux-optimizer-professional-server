@@ -121,6 +121,7 @@ discover_target() {
         return 1
     fi
     official_version=$(awk -F': ' '$1 == "Version" {print $2; exit}' "$metadata_file")
+    official_version="${official_version%%.*}"
     official_codename=$(awk -F': ' '$1 == "Codename" {print $2; exit}' "$metadata_file")
     rm -f "$metadata_file"
     [[ "$official_version" =~ ^[0-9]+$ && -n "$official_codename" ]] || return 1
