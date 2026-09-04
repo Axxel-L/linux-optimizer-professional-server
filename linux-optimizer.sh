@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# AxelL - Linux Optimmisateur - lanceur Debian 13
+# AxelL - Linux Optimmisateur - lanceur Debian
 # -----------------------------------------------------------------------------
 # Audit en lecture seule puis application d'un profil d'optimisation, avec un
 # tableau de bord terminal mis a jour en direct (etapes, pourcentage, chrono).
@@ -250,7 +250,7 @@ ui_render() {
     local note_line progress_file_value
     printf '\033[2J\033[H'
     out "${C_CYAN}${UI_RULE}${C_RESET}"
-    out "  ${C_GREEN}${APP_NAME}${C_RESET}   ${C_DIM}Debian 13 | v${APP_VERSION} | ${APP_LICENSE}${C_RESET}"
+    out "  ${C_GREEN}${APP_NAME}${C_RESET}   ${C_DIM}${OS_LABEL:-Debian} | v${APP_VERSION} | ${APP_LICENSE}${C_RESET}"
     if [[ -n "${PROFILE:-}" ]]; then
         out "  ${C_DIM}Profil : ${PROFILE}${C_RESET}"
     fi
@@ -316,7 +316,7 @@ show_splash() {
     done
     splash_row ""
     splash_row "$APP_NAME" "$C_GREEN"
-    splash_row "Audit et optimisation prudente d'un serveur Debian 13" "$C_DIM"
+    splash_row "Audit et optimisation prudente d'un serveur ${OS_LABEL:-Debian}" "$C_DIM"
     splash_row "v$APP_VERSION | $APP_LICENSE" "$C_CYAN"
     splash_row ""
     out "${C_CYAN}${S_BL}$(char_rule "$SPLASH_W" "$S_RULE")${S_BR}${C_RESET}"
@@ -341,6 +341,8 @@ load_os() {
     OS_ID="${ID:-unknown}"
     OS_VERSION="${VERSION_ID:-unknown}"
     OS_NAME="${PRETTY_NAME:-$OS_ID}"
+    OS_LABEL="Debian ${OS_VERSION}"
+    [[ -n "${VERSION_CODENAME:-}" ]] && OS_LABEL+=" (${VERSION_CODENAME})"
 }
 
 detect_services() {
@@ -438,7 +440,7 @@ finish_audit() {
 start_profile() {
     local profile="$1" auto="$2" profile_text
     if [[ "$OS_ID" != debian ]]; then
-        error "Cette version complete cible Debian. Systeme detecte : $OS_NAME."
+        error "Cette version cible Debian. Systeme detecte : $OS_NAME."
         exit 1
     fi
     if [[ ! -f "$ENGINE" ]]; then
@@ -556,7 +558,7 @@ run_profile_steps() {
 # --- Point d'entree -------------------------------------------------------------
 usage() {
     cat <<EOF
-${APP_NAME} v${APP_VERSION} - audit et optimisation prudente d'un serveur Debian 13.
+${APP_NAME} v${APP_VERSION} - audit et optimisation prudente d'un serveur Debian.
 
 Usage :
   sudo $0                mode interactif (menu)
