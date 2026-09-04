@@ -61,6 +61,7 @@ if ! declare -F info >/dev/null 2>&1; then
     note()    { engine_report_line "[INFO] $*"; printf '[....] %s\n' "$*"; }
     engine_runtime_error() {
         local rc="${1:-$?}"
+        (( rc == 2 )) && return 0
         (( ENGINE_ERROR_RECORDED )) && return 0
         ENGINE_ERROR_RECORDED=1
         engine_report_line "[CRASH] Code retour : $rc"
@@ -259,9 +260,25 @@ build_sysctl() {
     } > "$file"
 }
 
+is_lxc_container() {
+    local container_type=""
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        container_type=$(systemd-detect-virt --container 2>/dev/null || true)
+        [[ "$container_type" == lxc ]] && return 0
+    fi
+    if [[ -r /run/systemd/container ]] && [[ "$(< /run/systemd/container)" == lxc ]]; then
+        return 0
+    fi
+    grep -qaE '(^|/)(lxc|lxc\.payload)(/|$)' /proc/1/cgroup 2>/dev/null
+}
+
 apply_sysctl() {
     local output_file line
     info "Preparation des reglages noyau adaptes au profil."
+    if is_lxc_container; then
+        warn "Conteneur LXC detecte : les reglages noyau sont geres par l'hote et ne peuvent pas etre modifies depuis ce conteneur. Etape ignoree."
+        return 2
+    fi
     if ! confirm "Appliquer les reglages noyau et reseau ? Cela modifie des parametres systeme (TCP, memoire et limites kernel) ; un environnement conteneurise peut refuser certaines valeurs." 1; then
         warn "Reglages noyau refuses : aucune modification sysctl demandee."
         return 2
@@ -601,8 +618,10 @@ main() {
         printf '\n[%d/%d] %s ...\n' "$((i + 1))" "$total" "${STEP_LABELS[$i]}"
         engine_report_line "== Etape $((i + 1))/${total} : ${STEP_LABELS[$i]}"
         set +e
+        trap - ERR
         ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" )
         rc=$?
+        trap engine_runtime_error ERR
         set -e
         case "$rc" in
             0)

@@ -125,6 +125,8 @@ sudo ./linux-optimizer.sh --help
 
 Chaque lancement crée un rapport texte dans `/var/log/linux-optimizer/`. Les débuts et fins d'étapes, les avertissements, les diagnostics des commandes et les erreurs fatales y sont écrits avec leur date et leur heure. Le chemin exact du rapport est affiché à la fin d'une exécution réussie, après un audit, ou lors d'un échec contrôlé.
 
+Dans un conteneur LXC, l'étape des réglages noyau est détectée et ignorée automatiquement : le noyau est partagé avec l'hôte et ses paramètres doivent être modifiés depuis celui-ci.
+
 Le moteur peut aussi être lancé directement pour le débogage :
 
 ```bash

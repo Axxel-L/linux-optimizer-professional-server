@@ -128,6 +128,7 @@ record_runtime_error() {
 
 on_error() {
     local rc=$?
+    (( rc == 2 )) && return 0
     record_runtime_error "$rc"
     return "$rc"
 }
@@ -475,8 +476,10 @@ run_profile_steps() {
         # Sous-shell : isole l'etape, conserve set -e et laisse le lanceur
         # recuperer son code retour sans sortir lui-meme.
         set +e
+        trap - ERR
         ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" )
         rc=$?
+        trap on_error ERR
         set -e
         case "$rc" in
             0)
