@@ -148,7 +148,10 @@ write_config() {
 
 available_sysctl() {
     local key="$1" value="$2"
-    sysctl -q "$key" >/dev/null 2>&1 && printf '%s = %s\n' "$key" "$value"
+    if sysctl -q "$key" >/dev/null 2>&1; then
+        printf '%s = %s\n' "$key" "$value"
+    fi
+    return 0
 }
 
 # --- Systeme : APT -----------------------------------------------------------
