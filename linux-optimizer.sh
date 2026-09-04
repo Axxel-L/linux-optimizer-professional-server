@@ -99,6 +99,7 @@ TIMER_ROW=0
 readonly NOTES_FILE="$(mktemp /tmp/linux-optimizer-notes.XXXXXX 2>/dev/null || mktemp)"
 readonly WARN_FILE="$(mktemp /tmp/linux-optimizer-warn.XXXXXX 2>/dev/null || mktemp)"
 readonly PROGRESS_FILE="$(mktemp /tmp/linux-optimizer-progress.XXXXXX 2>/dev/null || mktemp)"
+readonly STEP_OUTPUT_FILE="$(mktemp /tmp/linux-optimizer-step-output.XXXXXX 2>/dev/null || mktemp)"
 REPORT_ERROR_RECORDED=0
 REPORT_ANNOUNCE=1
 declare -a STEP_STATES=()
@@ -107,7 +108,7 @@ declare -a STEP_STATES=()
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 
 cleanup() {
-    rm -f "$NOTES_FILE" "$WARN_FILE" "$PROGRESS_FILE"
+    rm -f "$NOTES_FILE" "$WARN_FILE" "$PROGRESS_FILE" "$STEP_OUTPUT_FILE"
 }
 
 report_open() {
@@ -288,7 +289,7 @@ ui_render() {
 
 refresh_timer() {
     [[ "$IS_TTY" == 1 && "$TIMER_ROW" -gt 0 ]] || return 0
-    printf '\0337\033[%d;1H\033[2K  %b%s%b\0338' \
+    printf '\033[s\033[%d;1H\033[2K  %b%s%b\033[u' \
         "$TIMER_ROW" "$C_CYAN" "$(elapsed_text)" "$C_RESET"
 }
 
@@ -475,7 +476,7 @@ start_profile() {
 }
 
 run_profile_steps() {
-    local i rc ok=0 skipped=0 total="${#STEP_FUNCS[@]}" wl
+    local i rc ok=0 skipped=0 total="${#STEP_FUNCS[@]}" wl line
     START_TIME=$(date +%s)
     : > "$NOTES_FILE"
     : > "$WARN_FILE"
@@ -498,11 +499,16 @@ run_profile_steps() {
         fi
         : > "$NOTES_FILE"
         : > "$PROGRESS_FILE"
+        : > "$STEP_OUTPUT_FILE"
         # Sous-shell : isole l'etape, conserve set -e et laisse le lanceur
         # recuperer son code retour sans sortir lui-meme.
         set +e
         trap - ERR
-        ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" ) &
+        if (( DASH )); then
+            ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" ) >"$STEP_OUTPUT_FILE" 2>&1 &
+        else
+            ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" ) &
+        fi
         local step_pid=$!
         while kill -0 "$step_pid" 2>/dev/null; do
             sleep 0.2
@@ -513,6 +519,11 @@ run_profile_steps() {
         trap on_error ERR
         set -e
         : > "$PROGRESS_FILE"
+        if (( rc != 0 && DASH )) && [[ -s "$STEP_OUTPUT_FILE" ]]; then
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                printf '[CMD] %s\n' "$line" >> "$NOTES_FILE"
+            done < "$STEP_OUTPUT_FILE"
+        fi
         CURRENT_STEP_PROGRESS=100
         case "$rc" in
             0)
