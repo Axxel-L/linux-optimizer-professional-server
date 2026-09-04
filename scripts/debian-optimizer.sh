@@ -166,7 +166,7 @@ run_apt() {
     output_file=$(mktemp /tmp/linux-optimizer-apt.XXXXXX)
     status_file=$(mktemp /tmp/linux-optimizer-apt-status.XXXXXX)
     : > "${PROGRESS_FILE:-/dev/null}"
-    DEBIAN_FRONTEND=noninteractive apt-get -q --status-fd=3 "$@" >"$output_file" 2>&1 3>"$status_file" &
+    DEBIAN_FRONTEND=noninteractive apt-get --status-fd=3 "$@" >"$output_file" 2>&1 3>"$status_file" &
     apt_pid=$!
     while kill -0 "$apt_pid" 2>/dev/null; do
         status_percent=$(awk -F: '$1 == "pmstatus" && $3 ~ /^[0-9]+$/ { value = $3 } END { print value }' "$status_file")
