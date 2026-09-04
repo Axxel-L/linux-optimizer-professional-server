@@ -183,6 +183,15 @@ run_apt() {
         apt_rc=$?
     fi
     rm -f "$status_file"
+    if (( apt_rc != 0 )) && grep -qiE 'option .*status-fd|status-fd.*not understood' "$output_file"; then
+        warn "Progression APT indisponible : nouvelle tentative sans status-fd."
+        : > "$output_file"
+        if DEBIAN_FRONTEND=noninteractive apt-get "$@" >"$output_file" 2>&1; then
+            apt_rc=0
+        else
+            apt_rc=$?
+        fi
+    fi
     if (( apt_rc == 0 )); then
         rm -f "$output_file"
         printf '%s\n' "$((APT_PHASE_INDEX * 100 / APT_PHASE_TOTAL))" > "${PROGRESS_FILE:-/dev/null}"

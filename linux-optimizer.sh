@@ -316,7 +316,7 @@ show_splash() {
     done
     splash_row ""
     splash_row "$APP_NAME" "$C_GREEN"
-    splash_row "Audit et optimisation prudente d'un serveur ${OS_LABEL:-Debian}" "$C_DIM"
+    splash_row "Audit et optimisation prudente d'un serveur Debian 13" "$C_DIM"
     splash_row "v$APP_VERSION | $APP_LICENSE" "$C_CYAN"
     splash_row ""
     out "${C_CYAN}${S_BL}$(char_rule "$SPLASH_W" "$S_RULE")${S_BR}${C_RESET}"
