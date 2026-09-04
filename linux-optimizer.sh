@@ -41,6 +41,7 @@ readonly APP_VERSION="2.2.0"
 readonly APP_LICENSE="MIT"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ENGINE="${SCRIPT_DIR}/scripts/debian-optimizer.sh"
+readonly RELEASE_UPGRADE="${SCRIPT_DIR}/scripts/debian-release-upgrade.sh"
 readonly LOG_DIR="/var/log/linux-optimizer"
 readonly REPORT_FILE="${LOG_DIR}/report-$(date +%Y%m%d-%H%M%S).txt"
 # Attention : pas de substitution de commande ici, le stdout y est un pipe et
@@ -102,6 +103,7 @@ readonly PROGRESS_FILE="$(mktemp /tmp/linux-optimizer-progress.XXXXXX 2>/dev/nul
 readonly STEP_OUTPUT_FILE="$(mktemp /tmp/linux-optimizer-step-output.XXXXXX 2>/dev/null || mktemp)"
 REPORT_ERROR_RECORDED=0
 REPORT_ANNOUNCE=1
+RELEASE_DETECTION_RC=2
 declare -a STEP_STATES=()
 
 # --- Sortie console / journal ---------------------------------------------------
@@ -340,6 +342,9 @@ show_splash() {
     splash_row ""
     splash_row "$APP_NAME" "$C_GREEN"
     splash_row "Audit et optimisation prudente d'un serveur Debian 13" "$C_DIM"
+    if [[ -n "${NEXT_DEBIAN_VERSION:-}" ]]; then
+        splash_row "Stable suivante disponible : Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME})" "$C_YELLOW"
+    fi
     splash_row "v$APP_VERSION | $APP_LICENSE" "$C_CYAN"
     splash_row ""
     out "${C_CYAN}${S_BL}$(char_rule "$SPLASH_W" "$S_RULE")${S_BR}${C_RESET}"
@@ -366,6 +371,91 @@ load_os() {
     OS_NAME="${PRETTY_NAME:-$OS_ID}"
     OS_LABEL="Debian ${OS_VERSION}"
     [[ -n "${VERSION_CODENAME:-}" ]] && OS_LABEL+=" (${VERSION_CODENAME})"
+}
+
+detect_next_debian_release() {
+    local release_file current_version target_version target_codename
+    NEXT_DEBIAN_VERSION=""
+    NEXT_DEBIAN_CODENAME=""
+    release_file=$(mktemp /tmp/linux-optimizer-release.XXXXXX)
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --silent --show-error --max-time 10 \
+            https://deb.debian.org/debian/dists/stable/Release > "$release_file" 2>/dev/null || {
+            rm -f "$release_file"
+            return 1
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$release_file" --timeout=10 https://deb.debian.org/debian/dists/stable/Release || {
+            rm -f "$release_file"
+            return 1
+        }
+    else
+        rm -f "$release_file"
+        return 1
+    fi
+    target_version=$(awk -F': ' '$1 == "Version" {print $2; exit}' "$release_file")
+    target_codename=$(awk -F': ' '$1 == "Codename" {print $2; exit}' "$release_file")
+    rm -f "$release_file"
+    current_version="${OS_VERSION%%.*}"
+    if [[ ! "$current_version" =~ ^[0-9]+$ || ! "$target_version" =~ ^[0-9]+$ || -z "$target_codename" ]]; then
+        return 1
+    fi
+    if (( target_version == current_version )); then
+        return 2
+    fi
+    if (( target_version > current_version + 1 )); then
+        report_line "[FAIL] Plusieurs releases Debian sont a franchir : ${current_version} vers ${target_version}"
+        return 1
+    fi
+    if (( target_version < current_version )); then
+        return 2
+    fi
+    NEXT_DEBIAN_VERSION="$target_version"
+    NEXT_DEBIAN_CODENAME="$target_codename"
+    report_line "== Stable Debian suivante detectee : ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME})"
+    return 0
+}
+
+offer_release_upgrade() {
+    local answer
+    if [[ "$OS_ID" != debian ]]; then
+        return 0
+    fi
+    if (( RELEASE_DETECTION_RC == 0 )); then
+        info "Une nouvelle stable Debian est disponible : Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME})."
+        info "La migration modifiera les depots APT, les paquets, les services et potentiellement le noyau. Elle ne sera jamais automatique."
+        if [[ ! -x "$RELEASE_UPGRADE" ]]; then
+            error "Script de migration introuvable : $RELEASE_UPGRADE"
+            exit 1
+        fi
+        if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+            error "Une migration Debian exige un terminal interactif. Optimisation arretee."
+            exit 1
+        fi
+        answer=$(prompt_read "Migrer maintenant vers Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME}) ? [y=oui / n=continuer sans migration / q=quitter] : ")
+        case "$answer" in
+            y|Y)
+                info "Lancement de la migration Debian interactive."
+                "$RELEASE_UPGRADE" --target-version "$NEXT_DEBIAN_VERSION" --target-codename "$NEXT_DEBIAN_CODENAME"
+                info "Migration terminee ou preparee. Redemarrez manuellement puis relancez l'optimiseur."
+                exit 0
+                ;;
+            n|N|'')
+                warn "Migration Debian refusee : poursuite de l'optimisation actuelle."
+                ;;
+            q|Q)
+                info "Operation annulee avant optimisation."
+                exit 0
+                ;;
+            *)
+                error "Reponse invalide : optimisation arretee par securite."
+                exit 1
+                ;;
+        esac
+    elif (( RELEASE_DETECTION_RC == 1 )); then
+        error "Impossible de confirmer la stable Debian suivante. Optimisation arretee par securite."
+        exit 1
+    fi
 }
 
 detect_services() {
@@ -609,7 +699,9 @@ main() {
     load_os
     report_line "== ${APP_NAME} v${APP_VERSION} (${APP_LICENSE})"
     report_line "== OS : ${OS_NAME} ${OS_VERSION} - noyau $(uname -r) - demarrage $(date '+%Y-%m-%d %H:%M:%S')"
+    detect_next_debian_release || RELEASE_DETECTION_RC=$?
     show_splash
+    offer_release_upgrade
     detect_services
     show_audit
     case "${1:-}" in

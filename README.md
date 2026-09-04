@@ -127,6 +127,20 @@ Chaque lancement crée un rapport texte dans `/var/log/linux-optimizer/`. Les d�
 
 Dans un conteneur LXC, l'étape des réglages noyau est détectée et ignorée automatiquement : le noyau est partagé avec l'hôte et ses paramètres doivent être modifiés depuis celui-ci.
 
+### Migration Debian
+
+Au démarrage, le lanceur compare la version installée avec la stable Debian officielle. Si la release suivante est confirmée, il affiche la cible avant l'audit et demande s'il faut lancer la migration, continuer sans migration ou quitter. Une détection incertaine arrête le lancement par sécurité.
+
+La migration est réalisée par [scripts/debian-release-upgrade.sh](scripts/debian-release-upgrade.sh) et n'est jamais automatique. Elle exige un terminal interactif, refuse les conteneurs LXC et ne permet qu'un passage vers la release immédiatement suivante. Chaque phase sensible est confirmée : sauvegarde, dépôts, mise à jour APT, simulation, installation et nettoyage.
+
+Le script sauvegarde `/etc/apt`, la liste des paquets, les services activés et les fichiers de configuration importants dans `/var/backups/linux-optimizer/`. Les dépôts tiers sont signalés puis désactivés uniquement après confirmation. Une migration majeure ne dispose pas d'un rollback complet garanti : le redémarrage n'est jamais exécuté automatiquement et doit être fait manuellement après vérification.
+
+Pour lancer la procédure directement :
+
+```bash
+sudo ./scripts/debian-release-upgrade.sh
+```
+
 Le moteur peut aussi être lancé directement pour le débogage :
 
 ```bash
