@@ -208,7 +208,11 @@ ask() {
     local msg="$1" answer=""
     if (( DASH )); then ui_render; fi
     _prompt "$(printf '\n%b%s [y/N]%b ' "$C_YELLOW" "$msg" "$C_RESET")"
-    read -r answer || answer=""
+    if [[ -r /dev/tty ]]; then
+        read -r answer </dev/tty || answer=""
+    else
+        read -r answer || answer=""
+    fi
     [[ "$answer" =~ ^[yY]$ ]]
 }
 
@@ -226,7 +230,11 @@ confirm() {
 prompt_read() {
     local text="$1" answer=""
     _prompt "$text"
-    read -r answer || answer=""
+    if [[ -r /dev/tty ]]; then
+        read -r answer </dev/tty || answer=""
+    else
+        read -r answer || answer=""
+    fi
     printf '%s\n' "$answer"
 }
 
