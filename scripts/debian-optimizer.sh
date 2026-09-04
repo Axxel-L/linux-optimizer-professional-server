@@ -367,12 +367,12 @@ ssh_effective_value() {
 ssh_prompt() {
     local rule="$1" description="$2" answer=""
     if [[ -r /dev/tty && -w /dev/tty ]]; then
-        printf '%b%s%b\n' "${C_DIM:-}" "$description" "${C_RESET:-}" > /dev/tty
         printf '%b[SSH]%b %s ' "${C_CYAN:-}" "${C_RESET:-}" "$rule" > /dev/tty
+        printf '\n%b%s%b\n' "${C_DIM:-}" "$description" "${C_RESET:-}" > /dev/tty
         IFS= read -r answer < /dev/tty || answer=""
     else
-        printf '%s\n' "$description"
         printf '[SSH] %s ' "$rule"
+        printf '\n%s\n' "$description"
         IFS= read -r answer || answer=""
     fi
     printf '%s' "$answer"
