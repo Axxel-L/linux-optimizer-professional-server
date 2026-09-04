@@ -93,8 +93,12 @@ DASH=0            # 1 = tableau de bord plein ecran (profil en cours sur TTY)
 AUTO=0            # 1 = mode automatique (confirmations sautees, sauf force)
 PROFILE=""        # profil actif (fixe par le moteur au moment du source)
 START_TIME=0
+CURRENT_STEP_INDEX=-1
+CURRENT_STEP_PROGRESS=0
+ANIMATION_TICK=0
 readonly NOTES_FILE="$(mktemp /tmp/linux-optimizer-notes.XXXXXX 2>/dev/null || mktemp)"
 readonly WARN_FILE="$(mktemp /tmp/linux-optimizer-warn.XXXXXX 2>/dev/null || mktemp)"
+readonly PROGRESS_FILE="$(mktemp /tmp/linux-optimizer-progress.XXXXXX 2>/dev/null || mktemp)"
 REPORT_ERROR_RECORDED=0
 REPORT_ANNOUNCE=1
 declare -a STEP_STATES=()
@@ -103,7 +107,7 @@ declare -a STEP_STATES=()
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 
 cleanup() {
-    rm -f "$NOTES_FILE" "$WARN_FILE"
+    rm -f "$NOTES_FILE" "$WARN_FILE" "$PROGRESS_FILE"
 }
 
 report_open() {
@@ -243,7 +247,7 @@ status_span() {
 ui_render() {
     [[ "$IS_TTY" == 1 ]] || return 0
     local i total="${#STEP_FUNCS[@]}" done_count=0 bar filled empty pct
-    local note_line
+    local note_line progress_file_value
     printf '\033[2J\033[H'
     out "${C_CYAN}${UI_RULE}${C_RESET}"
     out "  ${C_GREEN}${APP_NAME}${C_RESET}   ${C_DIM}Debian 13 | v${APP_VERSION} | ${APP_LICENSE}${C_RESET}"
@@ -260,6 +264,13 @@ ui_render() {
             "$(( i + 1 ))" "$total" "${STEP_LABELS[$i]}"
     done
     pct=$(( done_count * 100 / total ))
+    if (( CURRENT_STEP_INDEX >= 0 && CURRENT_STEP_PROGRESS > 0 )); then
+        pct=$(( (done_count * 100 + CURRENT_STEP_PROGRESS) / total ))
+    fi
+    progress_file_value="$(< "$PROGRESS_FILE")"
+    if [[ "$progress_file_value" =~ ^[0-9]+$ ]] && (( CURRENT_STEP_INDEX >= 0 )); then
+        pct=$(( (done_count * 100 + progress_file_value) / total ))
+    fi
     filled=$(( pct * 34 / 100 ))
     empty=$(( 34 - filled ))
     bar="$(char_rule "$filled" "$S_FILL")$(char_rule "$empty" "$S_EMPTY")"
@@ -462,10 +473,16 @@ run_profile_steps() {
     for (( i = 0; i < total; i++ )); do
         STEP_STATES[$i]="pending"
     done
+    CURRENT_STEP_INDEX=-1
+    CURRENT_STEP_PROGRESS=0
+    ANIMATION_TICK=0
     report_line "== Debut du profil (${total} etapes)"
     (( DASH )) && ui_render
     for (( i = 0; i < total; i++ )); do
         STEP_STATES[$i]="running"
+        CURRENT_STEP_INDEX=$i
+        CURRENT_STEP_PROGRESS=0
+        ANIMATION_TICK=0
         report_line "== Etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}"
         if (( DASH )); then
             ui_render
@@ -473,14 +490,25 @@ run_profile_steps() {
             info "Etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}"
         fi
         : > "$NOTES_FILE"
+        : > "$PROGRESS_FILE"
         # Sous-shell : isole l'etape, conserve set -e et laisse le lanceur
         # recuperer son code retour sans sortir lui-meme.
         set +e
         trap - ERR
-        ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" )
+        ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" ) &
+        local step_pid=$!
+        while kill -0 "$step_pid" 2>/dev/null; do
+            sleep 0.2
+            ANIMATION_TICK=$((ANIMATION_TICK + 1))
+            CURRENT_STEP_PROGRESS=$(( 5 + (ANIMATION_TICK % 86) ))
+            (( DASH )) && ui_render
+        done
+        wait "$step_pid"
         rc=$?
         trap on_error ERR
         set -e
+        : > "$PROGRESS_FILE"
+        CURRENT_STEP_PROGRESS=100
         case "$rc" in
             0)
                 STEP_STATES[$i]="done"
@@ -504,6 +532,8 @@ run_profile_steps() {
                 exit 1
                 ;;
         esac
+        CURRENT_STEP_INDEX=-1
+        CURRENT_STEP_PROGRESS=0
         (( DASH )) && ui_render
     done
     kernel_reboot_notice

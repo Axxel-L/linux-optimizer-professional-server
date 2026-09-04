@@ -103,6 +103,8 @@ CONFIG_DIR="/etc/linux-optimizer"
 SYSCTL_FILE="${CONFIG_DIR}/sysctl-${PROFILE}.conf"
 LIMITS_FILE="${CONFIG_DIR}/limits.conf"
 SSH_FILE="${CONFIG_DIR}/sshd.conf"
+APT_PHASE_INDEX=1
+APT_PHASE_TOTAL=1
 
 # --- Etapes du profil (ordre d'execution) -------------------------------------
 STEP_LABELS=(
@@ -158,12 +160,32 @@ available_sysctl() {
 # --- Systeme : APT -----------------------------------------------------------
 
 run_apt() {
-    local label="$1" output_file line
+    local label="$1" output_file status_file line apt_pid status_percent progress
     shift
     info "Lancement : $label"
     output_file=$(mktemp /tmp/linux-optimizer-apt.XXXXXX)
-    if DEBIAN_FRONTEND=noninteractive apt-get -q "$@" >"$output_file" 2>&1; then
+    status_file=$(mktemp /tmp/linux-optimizer-apt-status.XXXXXX)
+    : > "${PROGRESS_FILE:-/dev/null}"
+    DEBIAN_FRONTEND=noninteractive apt-get -q --status-fd=3 "$@" >"$output_file" 2>&1 3>"$status_file" &
+    apt_pid=$!
+    while kill -0 "$apt_pid" 2>/dev/null; do
+        status_percent=$(awk -F: '$1 == "pmstatus" && $3 ~ /^[0-9]+$/ { value = $3 } END { print value }' "$status_file")
+        if [[ "$status_percent" =~ ^[0-9]+$ ]]; then
+            progress=$(( ((APT_PHASE_INDEX - 1) * 100 + status_percent) / APT_PHASE_TOTAL ))
+            printf '%s\n' "$progress" > "${PROGRESS_FILE:-/dev/null}"
+        fi
+        sleep 0.2
+    done
+    local apt_rc
+    if wait "$apt_pid"; then
+        apt_rc=0
+    else
+        apt_rc=$?
+    fi
+    rm -f "$status_file"
+    if (( apt_rc == 0 )); then
         rm -f "$output_file"
+        printf '%s\n' "$((APT_PHASE_INDEX * 100 / APT_PHASE_TOTAL))" > "${PROGRESS_FILE:-/dev/null}"
         success "$label termine."
         return 0
     fi
@@ -181,9 +203,13 @@ run_apt() {
 }
 
 update_system() {
+    APT_PHASE_TOTAL=3
+    APT_PHASE_INDEX=1
     run_apt "Mise a jour des index APT" update
+    APT_PHASE_INDEX=2
     run_apt "Mise a jour des paquets Debian" -y upgrade
     if apt-cache policy linux-image-amd64 2>/dev/null | awk '$1 == "Candidate:" && $2 != "(none)" {found=1} END {exit !found}'; then
+        APT_PHASE_INDEX=3
         run_apt "Mise a jour du noyau Debian si disponible" -y install --only-upgrade linux-image-amd64 linux-headers-amd64
     else
         warn "Paquet de noyau Debian generique indisponible : noyau actuel conserve."
@@ -195,6 +221,8 @@ install_base_packages() {
     if [[ "$PROFILE" != full ]] && has_role app; then packages+=(python3 python3-venv nodejs npm); fi
     if [[ "$PROFILE" != full ]] && has_role web; then packages+=(nginx); fi
     if [[ "$PROFILE" != full ]] && has_role docker; then packages+=(uidmap); fi
+    APT_PHASE_TOTAL=1
+    APT_PHASE_INDEX=1
     run_apt "Installation des outils serveur" -y install "${packages[@]}"
 }
 

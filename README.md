@@ -43,7 +43,7 @@ Ce dépôt est un **fork de [Linux-Optimizer](https://github.com/hawshemi/Linux-
 | 💾 **Toujours réversible** | Chaque fichier modifié est sauvegardé avec un suffixe daté sur place. |
 | 🐳 **Respectueux du métier** | Profils Docker, Web, Node.js/Python, Pterodactyl/Wings, KeyHelp : pas de purge de pare-feu, pas d'ouverture de port automatique, ports Docker préservés. |
 | 🌐 **DNS Cloudflare en option** | `1.1.1.1` / `1.0.0.1` (+ IPv6) appliqués selon votre gestionnaire réseau, **toujours avec confirmation explicite**. |
-| 🖥️ **Interface terminal moderne** | Splash d'accueil, tableau de bord étape par étape avec états en direct, % global, barre et chrono — sans spinner ni estimation. |
+| 🖥️ **Interface terminal moderne** | Splash d'accueil, tableau de bord étape par étape avec états en direct, chrono fluide et progression APT mesurée ; les autres étapes affichent une activité bornée jusqu'à leur fin. |
 | 📜 **Journal professionnel** | Rapport horodaté dans `/var/log/linux-optimizer/`, sans code ANSI, avec chaque étape, ses diagnostics et les erreurs fatales. |
 | ♻️ **Idempotent** | Relancez le script sans risque : les configurations déjà en place ne sont pas dupliquées. |
 
