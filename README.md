@@ -191,7 +191,7 @@ Configure la limite `nofile` (soft et hard, minimum 65536) dans `/etc/linux-opti
 <details>
 <summary><b>5. Validation et durcissement SSH</b></summary>
 
-Écrit `/etc/ssh/sshd_config.d/99-linux-optimizer.conf` (UseDNS, keepalive, forwarding restreint, X11 désactivé), **valide avec `sshd -t` avant tout rechargement** — en cas d'erreur, le fichier est retiré et rien n'est rechargé.
+L'étape pose des questions avant de modifier `/etc/ssh/sshd_config.d/99-linux-optimizer.conf` : connexion root (`PermitRootLogin`), mots de passe (`PasswordAuthentication`), clés (`PubkeyAuthentication`), tunnels (`AllowTcpForwarding`/`GatewayPorts`/`PermitTunnel`) et X11 (`X11Forwarding`). Une réponse vide conserve la valeur actuelle. Le script explique chaque impact, notamment le risque de perdre l'accès distant en désactivant root ou les mots de passe. Il valide avec `sshd -t` avant tout rechargement et restaure l'ancienne configuration si la validation ou le reload échoue.
 </details>
 
 <details>

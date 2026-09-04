@@ -358,30 +358,107 @@ apply_limits() {
 
 # --- SSH ----------------------------------------------------------------------
 
+ssh_effective_value() {
+    local key="$1" fallback="$2" value
+    value=$("$3" -T 2>/dev/null | awk -v key="$key" '$1 == key {print $2; exit}' || true)
+    printf '%s' "${value:-$fallback}"
+}
+
+ssh_prompt() {
+    local question="$1" answer=""
+    if [[ -r /dev/tty && -w /dev/tty ]]; then
+        printf '%s\n' "$question" > /dev/tty
+        IFS= read -r answer < /dev/tty || answer=""
+    else
+        printf '%s\n' "$question"
+        IFS= read -r answer || answer=""
+    fi
+    printf '%s' "$answer"
+}
+
+ssh_choice() {
+    local key="$1" current="$2" explanation="$3" answer
+    answer=$(ssh_prompt "[SSH] $explanation (actuel: $current) [y=activer / n=desactiver / Entree=conserver] : ")
+    if [[ "$answer" =~ ^[yY]$ ]]; then
+        printf 'yes'
+    elif [[ "$answer" =~ ^[nN]$ ]]; then
+        printf 'no'
+    else
+        printf '%s' "$current"
+    fi
+}
+
 apply_ssh() {
-    local sshd_bin
+    local sshd_bin current_root current_password current_pubkey current_forward current_x11
+    local permit_root password_auth pubkey_auth forwarding x11 ssh_config ssh_dropin ssh_previous ssh_had_previous=0
     sshd_bin="$(command -v sshd || true)"
     if [[ -z "$sshd_bin" ]]; then
         warn "sshd absent : configuration SSH ignoree."
         return 2
     fi
-    if ! confirm "Appliquer le durcissement SSH ?" 0; then
-        warn "Durcissement SSH decline."
+    current_root=$(ssh_effective_value permitrootlogin prohibit-password "$sshd_bin")
+    current_password=$(ssh_effective_value passwordauthentication yes "$sshd_bin")
+    current_pubkey=$(ssh_effective_value pubkeyauthentication yes "$sshd_bin")
+    current_forward=$(ssh_effective_value allowtcpforwarding yes "$sshd_bin")
+    current_x11=$(ssh_effective_value x11forwarding no "$sshd_bin")
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        warn "Aucun terminal interactif disponible : configuration SSH conservee."
         return 2
     fi
-    write_config "$SSH_FILE" $'# Managed by AxelL Linux Optimmisateur\nUseDNS no\nTCPKeepAlive yes\nClientAliveInterval 300\nClientAliveCountMax 2\nAllowTcpForwarding no\nGatewayPorts no\nPermitTunnel no\nX11Forwarding no'
+    ssh_prompt "Configuration SSH interactive : une reponse vide conserve la valeur actuelle."
+    ssh_prompt "Interdire PermitRootLogin no empeche les nouvelles connexions SSH root et exige un autre acces administrateur fonctionnel."
+    permit_root=$(ssh_choice permitrootlogin "$current_root" "Autoriser la connexion SSH root ? Repondre n la desactive")
+    ssh_prompt "Desactiver PasswordAuthentication no reduit le brute-force mais exige une cle SSH fonctionnelle pour eviter le verrouillage."
+    password_auth=$(ssh_choice passwordauthentication "$current_password" "Autoriser l'authentification par mot de passe ? Repondre n la desactive")
+    pubkey_auth=$(ssh_choice pubkeyauthentication "$current_pubkey" "Autoriser l'authentification par cle SSH ?")
+    ssh_prompt "AllowTcpForwarding, GatewayPorts et PermitTunnel controlent les tunnels SSH et l'exposition de ports internes. Les desactiver peut casser des acces d'administration."
+    forwarding=$(ssh_choice allowtcpforwarding "$current_forward" "Autoriser les tunnels et transferts de ports SSH ?")
+    x11=$(ssh_choice x11forwarding "$current_x11" "Autoriser l'affichage d'applications graphiques via X11 ?")
+    ssh_config=$'# Managed by AxelL Linux Optimmisateur\nUseDNS no\nTCPKeepAlive yes\nClientAliveInterval 300\nClientAliveCountMax 2\nPermitRootLogin '
+    ssh_config+="$permit_root"
+    ssh_config+=$'\nPasswordAuthentication '
+    ssh_config+="$password_auth"
+    ssh_config+=$'\nPubkeyAuthentication '
+    ssh_config+="$pubkey_auth"
+    ssh_config+=$'\nAllowTcpForwarding '
+    ssh_config+="$forwarding"
+    ssh_config+=$'\nGatewayPorts no\nPermitTunnel '
+    ssh_config+="$forwarding"
+    ssh_config+=$'\nX11Forwarding '
+    ssh_config+="$x11"
+    if [[ "$permit_root" == no || "$password_auth" == no ]]; then
+        if ! confirm "Confirmer ces restrictions SSH ? Une mauvaise combinaison peut vous faire perdre l'acces distant." 1; then
+            warn "Restrictions SSH refusees : configuration SSH non modifiee."
+            return 2
+        fi
+    fi
+    write_config "$SSH_FILE" "$ssh_config"
+    ssh_dropin="/etc/ssh/sshd_config.d/99-linux-optimizer.conf"
+    ssh_previous=$(mktemp /tmp/linux-optimizer-ssh.XXXXXX)
+    if [[ -e "$ssh_dropin" ]]; then
+        cp -a "$ssh_dropin" "$ssh_previous"
+        ssh_had_previous=1
+    fi
     mkdir -p /etc/ssh/sshd_config.d
-    backup_file /etc/ssh/sshd_config.d/99-linux-optimizer.conf
-    cp "$SSH_FILE" /etc/ssh/sshd_config.d/99-linux-optimizer.conf
+    backup_file "$ssh_dropin"
+    cp "$SSH_FILE" "$ssh_dropin"
     if ! "$sshd_bin" -t; then
-        rm -f /etc/ssh/sshd_config.d/99-linux-optimizer.conf
+        if (( ssh_had_previous )); then cp -a "$ssh_previous" "$ssh_dropin"; else rm -f "$ssh_dropin"; fi
+        rm -f "$ssh_previous"
         error "Configuration SSH invalide : aucun redemarrage effectue."
         return 1
     fi
     if confirm "Redemarrer SSH pour appliquer le durcissement maintenant ?" 0; then
-        systemctl reload ssh 2>/dev/null || systemctl reload sshd
+        if ! systemctl reload ssh 2>/dev/null && ! systemctl reload sshd; then
+            if (( ssh_had_previous )); then cp -a "$ssh_previous" "$ssh_dropin"; else rm -f "$ssh_dropin"; fi
+            rm -f "$ssh_previous"
+            error "Le rechargement SSH a echoue : ancienne configuration restauree."
+            return 1
+        fi
+        rm -f "$ssh_previous"
         success "SSH valide et recharge."
     else
+        rm -f "$ssh_previous"
         warn "Configuration SSH installee mais non rechargee."
     fi
     return 0

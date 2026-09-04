@@ -1,10 +1,14 @@
-# Durcissement SSH optionnel pour Debian 13.
+# Valeurs SSH de reference ; l'assistant conserve la configuration actuelle
+# quand une question est laissee vide.
 # Valider avec `sshd -t` avant tout rechargement.
 
 UseDNS no
 TCPKeepAlive yes
 ClientAliveInterval 300
 ClientAliveCountMax 2
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
 AllowTcpForwarding no
 GatewayPorts no
 PermitTunnel no
