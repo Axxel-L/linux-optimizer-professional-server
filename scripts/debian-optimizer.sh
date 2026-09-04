@@ -262,6 +262,10 @@ build_sysctl() {
 apply_sysctl() {
     local output_file line
     info "Preparation des reglages noyau adaptes au profil."
+    if ! confirm "Appliquer les reglages noyau et reseau ? Cela modifie des parametres systeme (TCP, memoire et limites kernel) ; un environnement conteneurise peut refuser certaines valeurs." 1; then
+        warn "Reglages noyau refuses : aucune modification sysctl demandee."
+        return 2
+    fi
     mkdir -p "$CONFIG_DIR"
     backup_file "$SYSCTL_FILE"
     build_sysctl
@@ -275,6 +279,11 @@ apply_sysctl() {
             done < "$output_file"
         fi
         cat "$output_file" >&2
+        if grep -qiE 'permission denied|operation not permitted|read-only file system' "$output_file"; then
+            rm -f "$output_file" "$SYSCTL_FILE"
+            warn "Reglages noyau partiellement ou totalement refuses par le noyau (permissions/capacites insuffisantes). Cette etape est ignoree ; executez le script sur l'hote Debian ou ajoutez les capacites noyau requises."
+            return 2
+        fi
         rm -f "$output_file" "$SYSCTL_FILE"
         error "Les reglages noyau n'ont pas ete appliques."
         return 1

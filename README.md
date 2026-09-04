@@ -135,7 +135,7 @@ Ce mode produit également son propre rapport et affiche son emplacement. Un arr
 
 En interactif, deux modes sont proposés :
 
-1. **Optimisation complète automatique** — met à jour Debian et son noyau, installe les outils, applique socle + réglages sans question intermédiaire ;
+1. **Optimisation complète automatique** — met à jour Debian et son noyau, installe les outils et applique le socle ; les changements sensibles comme les réglages noyau, SSH et DNS restent expliqués et soumis à confirmation ;
 2. **Choisir les rôles** — sélectionnez Docker, Web, Node.js/Python, Pterodactyl ou KeyHelp ; le profil combiné est appliqué en une seule passe.
 
 ---
