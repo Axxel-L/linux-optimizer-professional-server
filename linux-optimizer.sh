@@ -289,8 +289,23 @@ ui_render() {
 
 refresh_timer() {
     [[ "$IS_TTY" == 1 && "$TIMER_ROW" -gt 0 ]] || return 0
-    printf '\033[s\033[%d;1H\033[2K  %b%s%b\033[u' \
-        "$TIMER_ROW" "$C_CYAN" "$(elapsed_text)" "$C_RESET"
+    local total="${#STEP_FUNCS[@]}" done_count=0 pct filled empty bar progress_file_value state
+    for state in "${STEP_STATES[@]}"; do
+        case "$state" in
+            done|skip|fail) done_count=$((done_count + 1)) ;;
+        esac
+    done
+    pct=$(( done_count * 100 / total ))
+    progress_file_value="$(< "$PROGRESS_FILE")"
+    if [[ "$progress_file_value" =~ ^[0-9]+$ ]] && (( CURRENT_STEP_INDEX >= 0 )); then
+        pct=$(( (done_count * 100 + progress_file_value) / total ))
+    fi
+    filled=$(( pct * 34 / 100 ))
+    empty=$(( 34 - filled ))
+    bar="$(char_rule "$filled" "$S_FILL")$(char_rule "$empty" "$S_EMPTY")"
+    printf '\033[s\033[%d;1H\033[2K  %b%s%b  %b%d%%%b   %b%s%b\033[u' \
+        "$TIMER_ROW" "$C_CYAN" "$bar" "$C_RESET" "$C_GREEN" "$pct" "$C_RESET" \
+        "$C_DIM" "$(elapsed_text)" "$C_RESET"
 }
 
 # --- Splash d'accueil -------------------------------------------------------
