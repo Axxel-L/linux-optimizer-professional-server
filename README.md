@@ -107,7 +107,7 @@ Ce projet est pensé pour ce contexte :
 Sur un serveur Debian 13, en root ou avec un compte `sudo` :
 
 ```bash
-tmp=$(mktemp -d) && wget -qO "$tmp/linux-optimizer.tar.gz" "https://github.com/Axxel-L/linux-optimizer-professional-server/archive/refs/heads/main.tar.gz" && tar -xzf "$tmp/linux-optimizer.tar.gz" -C "$tmp" && cd "$tmp/linux-optimizer-professional-server-main" && chmod +x linux-optimizer.sh scripts/*.sh && sudo ./linux-optimizer.sh
+wget -qO- "https://raw.githubusercontent.com/Axxel-L/linux-optimizer-professional-server/main/install.sh" | sudo bash
 ```
 
 Ou directement depuis une archive : [télécharger la dernière version](https://github.com/Axxel-L/linux-optimizer-professional-server/archive/refs/heads/main.tar.gz).
