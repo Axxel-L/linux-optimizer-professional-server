@@ -365,24 +365,26 @@ ssh_effective_value() {
 }
 
 ssh_prompt() {
-    local question="$1" answer=""
+    local rule="$1" description="$2" answer=""
     if [[ -r /dev/tty && -w /dev/tty ]]; then
-        printf '%s\n' "$question" > /dev/tty
+        printf '%b%s%b\n' "${C_DIM:-}" "$description" "${C_RESET:-}" > /dev/tty
+        printf '%b[SSH]%b %s ' "${C_CYAN:-}" "${C_RESET:-}" "$rule" > /dev/tty
         IFS= read -r answer < /dev/tty || answer=""
     else
-        printf '%s\n' "$question"
+        printf '%s\n' "$description"
+        printf '[SSH] %s ' "$rule"
         IFS= read -r answer || answer=""
     fi
     printf '%s' "$answer"
 }
 
 ssh_choice() {
-    local key="$1" current="$2" explanation="$3" answer
-    answer=$(ssh_prompt "[SSH] $explanation (actuel: $current) [y=activer / n=desactiver / Entree=conserver] : ")
+    local current="$1" rule="$2" description="$3" yes_value="$4" no_value="$5" answer
+    answer=$(ssh_prompt "$rule (actuel : $current) [y/n, Entree = conserver] :" "$description")
     if [[ "$answer" =~ ^[yY]$ ]]; then
-        printf 'yes'
+        printf '%s' "$yes_value"
     elif [[ "$answer" =~ ^[nN]$ ]]; then
-        printf 'no'
+        printf '%s' "$no_value"
     else
         printf '%s' "$current"
     fi
@@ -405,15 +407,11 @@ apply_ssh() {
         warn "Aucun terminal interactif disponible : configuration SSH conservee."
         return 2
     fi
-    ssh_prompt "Configuration SSH interactive : une reponse vide conserve la valeur actuelle."
-    ssh_prompt "Interdire PermitRootLogin no empeche les nouvelles connexions SSH root et exige un autre acces administrateur fonctionnel."
-    permit_root=$(ssh_choice permitrootlogin "$current_root" "Autoriser la connexion SSH root ? Repondre n la desactive")
-    ssh_prompt "Desactiver PasswordAuthentication no reduit le brute-force mais exige une cle SSH fonctionnelle pour eviter le verrouillage."
-    password_auth=$(ssh_choice passwordauthentication "$current_password" "Autoriser l'authentification par mot de passe ? Repondre n la desactive")
-    pubkey_auth=$(ssh_choice pubkeyauthentication "$current_pubkey" "Autoriser l'authentification par cle SSH ?")
-    ssh_prompt "AllowTcpForwarding, GatewayPorts et PermitTunnel controlent les tunnels SSH et l'exposition de ports internes. Les desactiver peut casser des acces d'administration."
-    forwarding=$(ssh_choice allowtcpforwarding "$current_forward" "Autoriser les tunnels et transferts de ports SSH ?")
-    x11=$(ssh_choice x11forwarding "$current_x11" "Autoriser l'affichage d'applications graphiques via X11 ?")
+    permit_root=$(ssh_choice "$current_root" "Desactiver PermitRootLogin (interdire la connexion root) ?" "Empêche les nouvelles connexions SSH root. Un autre accès administrateur fonctionnel est nécessaire." no yes)
+    password_auth=$(ssh_choice "$current_password" "Desactiver PasswordAuthentication (interdire les mots de passe) ?" "Réduit le brute-force, mais exige une clé SSH fonctionnelle pour éviter le verrouillage." no yes)
+    pubkey_auth=$(ssh_choice "$current_pubkey" "Activer PubkeyAuthentication (autoriser les clés SSH) ?" "Permet l'authentification par clé publique, généralement plus résistante au brute-force." yes no)
+    forwarding=$(ssh_choice "$current_forward" "Autoriser AllowTcpForwarding (tunnels et transferts de ports) ?" "Les tunnels peuvent servir à administrer des services internes ; les interdire peut casser des accès existants." yes no)
+    x11=$(ssh_choice "$current_x11" "Autoriser X11Forwarding (applications graphiques distantes) ?" "Autorise l'affichage d'applications graphiques via SSH ; désactivez-le si vous n'en avez pas l'usage." yes no)
     ssh_config=$'# Managed by AxelL Linux Optimmisateur\nUseDNS no\nTCPKeepAlive yes\nClientAliveInterval 300\nClientAliveCountMax 2\nPermitRootLogin '
     ssh_config+="$permit_root"
     ssh_config+=$'\nPasswordAuthentication '
