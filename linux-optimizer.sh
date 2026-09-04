@@ -700,7 +700,11 @@ main() {
     load_os
     report_line "== ${APP_NAME} v${APP_VERSION} (${APP_LICENSE})"
     report_line "== OS : ${OS_NAME} ${OS_VERSION} - noyau $(uname -r) - demarrage $(date '+%Y-%m-%d %H:%M:%S')"
-    detect_next_debian_release || RELEASE_DETECTION_RC=$?
+    if detect_next_debian_release; then
+        RELEASE_DETECTION_RC=0
+    else
+        RELEASE_DETECTION_RC=$?
+    fi
     show_splash
     offer_release_upgrade
     detect_services
