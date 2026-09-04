@@ -95,11 +95,16 @@ PROFILE=""        # profil actif (fixe par le moteur au moment du source)
 START_TIME=0
 readonly NOTES_FILE="$(mktemp /tmp/linux-optimizer-notes.XXXXXX 2>/dev/null || mktemp)"
 readonly WARN_FILE="$(mktemp /tmp/linux-optimizer-warn.XXXXXX 2>/dev/null || mktemp)"
-trap 'rm -f "$NOTES_FILE" "$WARN_FILE"' EXIT
+REPORT_ERROR_RECORDED=0
+REPORT_ANNOUNCE=1
 declare -a STEP_STATES=()
 
 # --- Sortie console / journal ---------------------------------------------------
 mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+cleanup() {
+    rm -f "$NOTES_FILE" "$WARN_FILE"
+}
 
 report_open() {
     [[ -e "$REPORT_FILE" ]] && return 0
@@ -111,6 +116,39 @@ report_line() {
     report_open || return 0
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$REPORT_FILE" 2>/dev/null || true
 }
+
+record_runtime_error() {
+    local rc="$1"
+    (( REPORT_ERROR_RECORDED )) && return 0
+    REPORT_ERROR_RECORDED=1
+    report_line "[CRASH] Code retour : $rc"
+    report_line "[CRASH] Commande : ${BASH_COMMAND:-inconnue}"
+    report_line "[CRASH] Contexte : ${BASH_SOURCE[1]:-inconnu}:${BASH_LINENO[0]:-0}"
+}
+
+on_error() {
+    local rc=$?
+    record_runtime_error "$rc"
+    return "$rc"
+}
+
+on_exit() {
+    local rc=$?
+    if (( ! REPORT_ANNOUNCE )); then
+        cleanup
+        return "$rc"
+    elif (( rc != 0 )); then
+        record_runtime_error "$rc"
+        printf '%s\n' "[FAIL] Echec du script (code $rc). Rapport : $REPORT_FILE" >&2
+    else
+        printf '%s\n' "Rapport disponible : $REPORT_FILE"
+    fi
+    cleanup
+    return "$rc"
+}
+
+trap on_error ERR
+trap on_exit EXIT
 
 out() { printf '%b\n' "$*"; }
 
@@ -434,10 +472,12 @@ run_profile_steps() {
             info "Etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}"
         fi
         : > "$NOTES_FILE"
-        # Sous-shell : isole l'etape. set -e reste actif : toute commande en
-        # echec interne termine l'etape et remonte son code au lanceur.
-        ( "${STEP_FUNCS[$i]}" )
+        # Sous-shell : isole l'etape, conserve set -e et laisse le lanceur
+        # recuperer son code retour sans sortir lui-meme.
+        set +e
+        ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" )
         rc=$?
+        set -e
         case "$rc" in
             0)
                 STEP_STATES[$i]="done"
@@ -453,6 +493,7 @@ run_profile_steps() {
                 ;;
             *)
                 STEP_STATES[$i]="fail"
+                report_line "== FAIL : ${STEP_LABELS[$i]} (code $rc)"
                 (( DASH )) && ui_render
                 out ""
                 out "${C_RED}Echec de l'etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}.${C_RESET}"
@@ -498,7 +539,7 @@ EOF
 main() {
     [[ "$IS_TTY" == 1 ]] && printf '\033[2J\033[H'
     case "${1:-}" in
-        -h|--help) usage; exit 0 ;;
+        -h|--help) REPORT_ANNOUNCE=0; usage; exit 0 ;;
     esac
     require_root
     load_os

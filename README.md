@@ -44,7 +44,7 @@ Ce dépôt est un **fork de [Linux-Optimizer](https://github.com/hawshemi/Linux-
 | 🐳 **Respectueux du métier** | Profils Docker, Web, Node.js/Python, Pterodactyl/Wings, KeyHelp : pas de purge de pare-feu, pas d'ouverture de port automatique, ports Docker préservés. |
 | 🌐 **DNS Cloudflare en option** | `1.1.1.1` / `1.0.0.1` (+ IPv6) appliqués selon votre gestionnaire réseau, **toujours avec confirmation explicite**. |
 | 🖥️ **Interface terminal moderne** | Splash d'accueil, tableau de bord étape par étape avec états en direct, % global, barre et chrono — sans spinner ni estimation. |
-| 📜 **Journal professionnel** | Rapport horodaté dans `/var/log/linux-optimizer/`, sans code ANSI, lisible dans un fichier, un pipe ou une CI. |
+| 📜 **Journal professionnel** | Rapport horodaté dans `/var/log/linux-optimizer/`, sans code ANSI, avec chaque étape, ses diagnostics et les erreurs fatales. |
 | ♻️ **Idempotent** | Relancez le script sans risque : les configurations déjà en place ne sont pas dupliquées. |
 
 ### 🏢 … et pourquoi sur des serveurs professionnels ?
@@ -120,6 +120,18 @@ sudo ./linux-optimizer.sh --full         # optimisation complète automatique
 sudo ./linux-optimizer.sh --audit        # rapport seul, aucune modification
 sudo ./linux-optimizer.sh --help
 ```
+
+### Rapports et erreurs
+
+Chaque lancement crée un rapport texte dans `/var/log/linux-optimizer/`. Les débuts et fins d'étapes, les avertissements, les diagnostics des commandes et les erreurs fatales y sont écrits avec leur date et leur heure. Le chemin exact du rapport est affiché à la fin d'une exécution réussie, après un audit, ou lors d'un échec contrôlé.
+
+Le moteur peut aussi être lancé directement pour le débogage :
+
+```bash
+sudo PROFILE_MODE=web AUTO_APPLY=1 ./scripts/debian-optimizer.sh
+```
+
+Ce mode produit également son propre rapport et affiche son emplacement. Un arrêt impossible à intercepter par Bash, comme `SIGKILL`, une coupure électrique ou un kernel panic, ne peut pas écrire de ligne finale.
 
 En interactif, deux modes sont proposés :
 

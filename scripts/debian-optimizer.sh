@@ -37,12 +37,48 @@ set -Eeuo pipefail
 # --- Primitives de sortie : le lanceur fournit des versions adaptees a son
 # interface graphique quand ce fichier est source. En execution directe, on
 # retombe sur une sortie texte simple.
+ENGINE_STANDALONE=0
 if ! declare -F info >/dev/null 2>&1; then
-    info()    { printf '[INFO] %s\n' "$*"; }
-    success() { printf '[ OK ] %s\n' "$*"; }
-    warn()    { printf '[WARN] %s\n' "$*"; }
-    error()   { printf '[FAIL] %s\n' "$*" >&2; }
-    note()    { printf '[....] %s\n' "$*"; }
+    ENGINE_STANDALONE=1
+    ENGINE_ERROR_RECORDED=0
+    ENGINE_LOG_DIR="/var/log/linux-optimizer"
+    ENGINE_REPORT_FILE="${ENGINE_LOG_DIR}/report-engine-$(date +%Y%m%d-%H%M%S).txt"
+    mkdir -p "$ENGINE_LOG_DIR" 2>/dev/null || true
+    engine_report_line() {
+        mkdir -p "$ENGINE_LOG_DIR" 2>/dev/null || return 0
+        printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$ENGINE_REPORT_FILE" 2>/dev/null || true
+    }
+    engine_log_diagnostic() {
+        local line
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            engine_report_line "[CMD] $line"
+        done
+    }
+    info()    { engine_report_line "[INFO] $*"; printf '[INFO] %s\n' "$*"; }
+    success() { engine_report_line "[ OK ] $*"; printf '[ OK ] %s\n' "$*"; }
+    warn()    { engine_report_line "[WARN] $*"; printf '[WARN] %s\n' "$*"; }
+    error()   { engine_report_line "[FAIL] $*"; printf '[FAIL] %s\n' "$*" >&2; }
+    note()    { engine_report_line "[INFO] $*"; printf '[....] %s\n' "$*"; }
+    engine_runtime_error() {
+        local rc="${1:-$?}"
+        (( ENGINE_ERROR_RECORDED )) && return 0
+        ENGINE_ERROR_RECORDED=1
+        engine_report_line "[CRASH] Code retour : $rc"
+        engine_report_line "[CRASH] Commande : ${BASH_COMMAND:-inconnue}"
+        engine_report_line "[CRASH] Contexte : ${BASH_SOURCE[1]:-inconnu}:${BASH_LINENO[0]:-0}"
+    }
+    engine_exit() {
+        local rc=$?
+        if (( rc != 0 )); then
+            engine_runtime_error "$rc"
+            printf '[FAIL] Echec du moteur (code %s). Rapport : %s\n' "$rc" "$ENGINE_REPORT_FILE" >&2
+        else
+            printf 'Rapport disponible : %s\n' "$ENGINE_REPORT_FILE"
+        fi
+        return "$rc"
+    }
+    trap engine_runtime_error ERR
+    trap engine_exit EXIT
 fi
 
 if ! declare -F confirm >/dev/null 2>&1; then
@@ -118,7 +154,7 @@ available_sysctl() {
 # --- Systeme : APT -----------------------------------------------------------
 
 run_apt() {
-    local label="$1" output_file
+    local label="$1" output_file line
     shift
     info "Lancement : $label"
     output_file=$(mktemp /tmp/linux-optimizer-apt.XXXXXX)
@@ -126,6 +162,13 @@ run_apt() {
         rm -f "$output_file"
         success "$label termine."
         return 0
+    fi
+    if (( ENGINE_STANDALONE )); then
+        engine_log_diagnostic < "$output_file"
+    else
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            report_line "[CMD] $line"
+        done < "$output_file"
     fi
     cat "$output_file" >&2
     rm -f "$output_file"
@@ -214,17 +257,26 @@ build_sysctl() {
 }
 
 apply_sysctl() {
+    local output_file line
     info "Preparation des reglages noyau adaptes au profil."
     mkdir -p "$CONFIG_DIR"
     backup_file "$SYSCTL_FILE"
     build_sysctl
-    if ! sysctl --load="$SYSCTL_FILE" >/tmp/linux-optimizer-sysctl.$$ 2>&1; then
-        cat /tmp/linux-optimizer-sysctl.$$ >&2
-        rm -f /tmp/linux-optimizer-sysctl.$$ "$SYSCTL_FILE"
+    output_file=$(mktemp /tmp/linux-optimizer-sysctl.XXXXXX)
+    if ! sysctl --load="$SYSCTL_FILE" >"$output_file" 2>&1; then
+        if (( ENGINE_STANDALONE )); then
+            engine_log_diagnostic < "$output_file"
+        else
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                report_line "[CMD] $line"
+            done < "$output_file"
+        fi
+        cat "$output_file" >&2
+        rm -f "$output_file" "$SYSCTL_FILE"
         error "Les reglages noyau n'ont pas ete appliques."
         return 1
     fi
-    rm -f /tmp/linux-optimizer-sysctl.$$
+    rm -f "$output_file"
     success "Reglages noyau appliques dans $SYSCTL_FILE."
 }
 
@@ -531,15 +583,26 @@ main() {
     fi
     printf '\n%s\n' "$(profile_description)"
     printf 'Mode automatique : %s\n' "$([ "$AUTO" == 1 ] && printf 'oui' || printf 'non')"
+    engine_report_line "== Profil : $PROFILE (mode automatique: $([ "$AUTO" == 1 ] && printf 'oui' || printf 'non'))"
     local i rc total=${#STEP_FUNCS[@]}
     for (( i = 0; i < total; i++ )); do
         printf '\n[%d/%d] %s ...\n' "$((i + 1))" "$total" "${STEP_LABELS[$i]}"
-        ( "${STEP_FUNCS[$i]}" )
+        engine_report_line "== Etape $((i + 1))/${total} : ${STEP_LABELS[$i]}"
+        set +e
+        ( trap - ERR; set -e; "${STEP_FUNCS[$i]}" )
         rc=$?
+        set -e
         case "$rc" in
-            0) success "${STEP_LABELS[$i]} : termine." ;;
-            2) warn "${STEP_LABELS[$i]} : ignore." ;;
+            0)
+                engine_report_line "== OK : ${STEP_LABELS[$i]}"
+                success "${STEP_LABELS[$i]} : termine."
+                ;;
+            2)
+                engine_report_line "== IGNORE : ${STEP_LABELS[$i]}"
+                warn "${STEP_LABELS[$i]} : ignore."
+                ;;
             *)
+                engine_report_line "== FAIL : ${STEP_LABELS[$i]} (code $rc)"
                 error "${STEP_LABELS[$i]} : echec. Profil interrompu."
                 exit 1
                 ;;
@@ -548,6 +611,7 @@ main() {
     printf '\n'
     kernel_reboot_notice
     success "Profil $PROFILE termine."
+    engine_report_line "== Profil termine"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
