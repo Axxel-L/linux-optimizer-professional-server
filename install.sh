@@ -33,4 +33,7 @@ fi
 
 chmod +x "${repository_directory}/linux-optimizer.sh" "${repository_directory}"/scripts/*.sh
 cd "$repository_directory"
+if [[ -r /dev/tty ]]; then
+    exec ./linux-optimizer.sh "$@" </dev/tty
+fi
 exec ./linux-optimizer.sh "$@"
