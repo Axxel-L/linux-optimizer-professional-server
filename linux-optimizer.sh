@@ -95,7 +95,7 @@ PROFILE=""        # profil actif (fixe par le moteur au moment du source)
 START_TIME=0
 CURRENT_STEP_INDEX=-1
 CURRENT_STEP_PROGRESS=0
-ANIMATION_TICK=0
+TIMER_ROW=0
 readonly NOTES_FILE="$(mktemp /tmp/linux-optimizer-notes.XXXXXX 2>/dev/null || mktemp)"
 readonly WARN_FILE="$(mktemp /tmp/linux-optimizer-warn.XXXXXX 2>/dev/null || mktemp)"
 readonly PROGRESS_FILE="$(mktemp /tmp/linux-optimizer-progress.XXXXXX 2>/dev/null || mktemp)"
@@ -248,6 +248,7 @@ ui_render() {
     [[ "$IS_TTY" == 1 ]] || return 0
     local i total="${#STEP_FUNCS[@]}" done_count=0 bar filled empty pct
     local note_line progress_file_value
+    TIMER_ROW=$(( 7 + total ))
     printf '\033[2J\033[H'
     out "${C_CYAN}${UI_RULE}${C_RESET}"
     out "  ${C_GREEN}${APP_NAME}${C_RESET}   ${C_DIM}${OS_LABEL:-Debian} | v${APP_VERSION} | ${APP_LICENSE}${C_RESET}"
@@ -283,6 +284,12 @@ ui_render() {
             out "  ${C_DIM}${note_line}${C_RESET}"
         done < "$NOTES_FILE"
     fi
+}
+
+refresh_timer() {
+    [[ "$IS_TTY" == 1 && "$TIMER_ROW" -gt 0 ]] || return 0
+    printf '\0337\033[%d;1H\033[2K  %b%s%b\0338' \
+        "$TIMER_ROW" "$C_CYAN" "$(elapsed_text)" "$C_RESET"
 }
 
 # --- Splash d'accueil -------------------------------------------------------
@@ -477,14 +484,12 @@ run_profile_steps() {
     done
     CURRENT_STEP_INDEX=-1
     CURRENT_STEP_PROGRESS=0
-    ANIMATION_TICK=0
     report_line "== Debut du profil (${total} etapes)"
     (( DASH )) && ui_render
     for (( i = 0; i < total; i++ )); do
         STEP_STATES[$i]="running"
         CURRENT_STEP_INDEX=$i
         CURRENT_STEP_PROGRESS=0
-        ANIMATION_TICK=0
         report_line "== Etape $(( i + 1 ))/${total} : ${STEP_LABELS[$i]}"
         if (( DASH )); then
             ui_render
@@ -501,9 +506,7 @@ run_profile_steps() {
         local step_pid=$!
         while kill -0 "$step_pid" 2>/dev/null; do
             sleep 0.2
-            ANIMATION_TICK=$((ANIMATION_TICK + 1))
-            CURRENT_STEP_PROGRESS=$(( 5 + (ANIMATION_TICK % 86) ))
-            (( DASH )) && ui_render
+            (( DASH )) && refresh_timer
         done
         wait "$step_pid"
         rc=$?
