@@ -418,13 +418,19 @@ detect_next_debian_release() {
 }
 
 offer_release_upgrade() {
-    local answer
+    local answer release_rule release_description
     if [[ "$OS_ID" != debian ]]; then
         return 0
     fi
     if (( RELEASE_DETECTION_RC == 0 )); then
-        info "Une nouvelle stable Debian est disponible : Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME})."
-        info "La migration modifiera les depots APT, les paquets, les services et potentiellement le noyau. Elle ne sera jamais automatique."
+        release_rule="Une mise a niveau Debian est disponible : Debian ${OS_VERSION} (${VERSION_CODENAME:-inconnu}) -> Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME})"
+        release_description="Cette operation peut modifier les depots APT, les paquets, les services et le noyau. Elle est toujours interactive et aucun redemarrage ne sera lance automatiquement."
+        report_line "[INFO] $release_rule"
+        out ""
+        out "${C_CYAN}MISE A NIVEAU DU SYSTEME${C_RESET}"
+        out "${C_GREEN}[OS ]${C_RESET} $release_rule"
+        out "${C_DIM}$release_description${C_RESET}"
+        out ""
         if [[ ! -x "$RELEASE_UPGRADE" ]]; then
             error "Script de migration introuvable : $RELEASE_UPGRADE"
             exit 1
@@ -433,7 +439,7 @@ offer_release_upgrade() {
             error "Une migration Debian exige un terminal interactif. Optimisation arretee."
             exit 1
         fi
-        answer=$(prompt_read "Migrer maintenant vers Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME}) ? [y=oui / n=continuer sans migration / q=quitter] : ")
+        answer=$(prompt_read "Migrer maintenant ? [y=oui / n=continuer / q=quitter] : ")
         case "$answer" in
             y|Y)
                 info "Lancement de la migration Debian interactive."
