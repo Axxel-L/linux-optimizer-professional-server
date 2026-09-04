@@ -417,12 +417,34 @@ detect_next_debian_release() {
     return 0
 }
 
+is_lxc_container() {
+    local container_type=""
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        container_type=$(systemd-detect-virt --container 2>/dev/null || true)
+        [[ "$container_type" == lxc ]] && return 0
+    fi
+    if [[ -r /run/systemd/container ]] && [[ "$(< /run/systemd/container)" == lxc ]]; then
+        return 0
+    fi
+    grep -qaE '(^|/)(lxc|lxc\.payload)(/|$)' /proc/1/cgroup 2>/dev/null
+}
+
 offer_release_upgrade() {
     local answer release_rule release_description
     if [[ "$OS_ID" != debian ]]; then
         return 0
     fi
     if (( RELEASE_DETECTION_RC == 0 )); then
+        if is_lxc_container; then
+            report_line "[WARN] Stable Debian suivante detectee, mais migration indisponible dans un conteneur LXC."
+            out ""
+            out "${C_CYAN}MISE A NIVEAU DU SYSTEME${C_RESET}"
+            out "${C_YELLOW}[LXC]${C_RESET} Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME}) est disponible."
+            out "${C_DIM}Un conteneur LXC partage le noyau de l'hote : la migration doit etre faite sur l'hote ou par recreation du conteneur.${C_RESET}"
+            out "${C_DIM}Aucune migration ne sera lancee ici. L'optimisation peut continuer.${C_RESET}"
+            out ""
+            return 0
+        fi
         release_rule="Une mise a niveau Debian est disponible : Debian ${OS_VERSION} (${VERSION_CODENAME:-inconnu}) -> Debian ${NEXT_DEBIAN_VERSION} (${NEXT_DEBIAN_CODENAME})"
         release_description="Cette operation peut modifier les depots APT, les paquets, les services et le noyau. Elle est toujours interactive et aucun redemarrage ne sera lance automatiquement."
         report_line "[INFO] $release_rule"
